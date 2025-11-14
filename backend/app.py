@@ -4,7 +4,6 @@ from flask_cors import CORS
 import bcrypt
 import os
 from werkzeug.utils import secure_filename
-from ai_module.spell_corrector import correct_spelling
 from ai_module.punctuation_fixer import suggest_punctuation
 from ai_module.style_adapter import detect_style, adapt_style
 from openai import OpenAI
@@ -145,33 +144,6 @@ def upload_media():
     db_service.insert_media(message_id, media_type, f"docs/{filename}")
 
     return jsonify({"message": "Media uploaded", "file_path": f"docs/{filename}"})
-
-
-@app.route("/suggest", methods=["POST"])
-def suggest_text():
-    try:
-        data = request.get_json()
-        text = data.get("text", "").strip()
-        user_id = data.get("user_id")
-
-        if not text or not user_id:
-            return jsonify({"error": "text ve user_id zorunludur"}), 400
-
-        corrected = correct_spelling(text)
-        punctuated = suggest_punctuation(corrected)
-
-        # basit bir varsayılan stil verelim (istersen detect_style ile zenginleştir)
-        suggestion_id = db_service.insert_suggestion(user_id, text, punctuated, "neutral")
-
-        return jsonify({
-            "suggestion_id": suggestion_id,
-            "original": text,
-            "corrected": corrected,
-            "punctuated": punctuated
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 
