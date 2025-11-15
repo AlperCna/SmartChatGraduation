@@ -105,12 +105,25 @@ def login():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.route("/user_by_username/<username>", methods=["GET"])
-def get_user_by_username(username):
+def get_user_by_username_route(username):
     user = db_service.get_user_by_username(username)
     if user:
-        return jsonify(user)
-    return jsonify({"error": "User not found"}), 404
+        return jsonify({
+            "success": True,
+            "user": {
+                "id": user["user_id"],
+                "username": user["username"],
+                "email": user["email"]
+            }
+        }), 200
+
+    return jsonify({
+        "success": False,
+        "error": "User not found"
+    }), 404
+
 
 @app.route("/user_by_id/<int:user_id>", methods=["GET"])
 def get_user_by_id(user_id):
