@@ -65,9 +65,9 @@ def list_messages():
     receiver_id = request.args.get("receiver_id")
     if not sender_id or not receiver_id:
         return jsonify({"error": "sender_id ve receiver_id zorunludur."}), 400
-    messages = db_service.get_messages(sender_id, receiver_id)
-    return jsonify(messages)
 
+    messages = db_service.get_messages(sender_id, receiver_id)
+    return jsonify({"messages": messages})
 @app.route("/signup", methods=["POST"])
 def signup():
     try:
