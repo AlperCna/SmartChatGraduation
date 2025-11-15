@@ -1,14 +1,19 @@
-import bcrypt
 import mysql.connector
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # .env dosyasını yükle
+
 
 def get_db_connection():
-    conn = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="bc748596",
-        database="smartchat"
+    return mysql.connector.connect(
+        host=os.getenv("DB_HOST"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        database=os.getenv("DB_NAME"),
+        port=int(os.getenv("DB_PORT"))
     )
-    return conn
+
 
 def insert_user(username, email, password_hash):
     conn = get_db_connection()
@@ -19,6 +24,7 @@ def insert_user(username, email, password_hash):
     cursor.close()
     conn.close()
 
+
 def get_users():
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -28,16 +34,18 @@ def get_users():
     conn.close()
     return users
 
+
 def insert_message(sender_id, receiver_id, content):
     conn = get_db_connection()
     cursor = conn.cursor()
     sql = "INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)"
     cursor.execute(sql, (sender_id, receiver_id, content))
-    message_id = cursor.lastrowid  # ✅ eklendi
+    message_id = cursor.lastrowid
     conn.commit()
     cursor.close()
     conn.close()
-    return message_id  # ✅ döndürülüyor
+    return message_id
+
 
 def get_messages(sender_id, receiver_id):
     conn = get_db_connection()
@@ -56,6 +64,7 @@ def get_messages(sender_id, receiver_id):
     conn.close()
     return messages
 
+
 def get_user_by_email(email):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -64,6 +73,7 @@ def get_user_by_email(email):
     cursor.close()
     conn.close()
     return user
+
 
 def get_user_by_username(username):
     conn = get_db_connection()
@@ -74,6 +84,7 @@ def get_user_by_username(username):
     conn.close()
     return user
 
+
 def get_user_by_id(user_id):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -82,6 +93,7 @@ def get_user_by_id(user_id):
     cursor.close()
     conn.close()
     return user
+
 
 def get_chat_partners(user_id):
     conn = get_db_connection()
@@ -96,6 +108,7 @@ def get_chat_partners(user_id):
     cursor.close()
     conn.close()
     return result
+
 
 def insert_media(message_id, media_type, file_path):
     conn = get_db_connection()
@@ -123,7 +136,6 @@ def insert_suggestion(user_id, original_text, suggested_text, style):
     cursor.close()
     conn.close()
     return suggestion_id
-
 
 
 def update_suggestion_acceptance(suggestion_id, accepted):
@@ -164,7 +176,6 @@ def create_relationship(user1_id, user2_id, style="neutral", closeness_score=50)
     conn.close()
 
 
-
 def update_relationship(user1_id, user2_id, style=None, closeness_score=None):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -179,7 +190,7 @@ def update_relationship(user1_id, user2_id, style=None, closeness_score=None):
         values.append(closeness_score)
 
     if not fields:
-        return  # Güncellenecek veri yok
+        return
 
     sql = f"""
         UPDATE user_relationships
@@ -193,16 +204,12 @@ def update_relationship(user1_id, user2_id, style=None, closeness_score=None):
     cursor.close()
     conn.close()
 
+
 def adjust_closeness(user1_id, user2_id, delta):
-    """
-    İlişki puanını delta kadar artırır/azaltır, sınırları 0-100 arasında tutar.
-    Eşik değerlerine göre style'ı otomatik günceller.
-    """
     relationship = get_relationship(user1_id, user2_id)
     if relationship:
         new_score = max(0, min(100, relationship["closeness_score"] + delta))
 
-        # Style belirleme
         if new_score <= 30:
             style = "formal"
         elif new_score >= 71:
@@ -212,7 +219,5 @@ def adjust_closeness(user1_id, user2_id, delta):
 
         update_relationship(user1_id, user2_id, style=style, closeness_score=new_score)
     else:
-        # İlişki yoksa oluştur ve puanı uygula
         create_relationship(user1_id, user2_id, "neutral", 50)
         adjust_closeness(user1_id, user2_id, delta)
-
