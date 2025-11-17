@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 import os
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 analyzer = SentimentIntensityAnalyzer()
+from ai_module.ml_model import predict_sentiment
+
 
 load_dotenv()
 print("API Key test:", os.getenv("OPENAI_API_KEY")[:6], "...")  # sadece ilk 6 karakter
@@ -266,6 +268,20 @@ def update_suggestion(suggestion_id):
         return jsonify({"message": "Kabul durumu güncellendi"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+from ai_module.ml_model import predict_sentiment
+
+@app.route("/predict_sentiment", methods=["POST"])
+def predict_sentiment_route():
+    data = request.get_json()
+    text = data.get("text", "")
+
+    if not text.strip():
+        return jsonify({"error": "Text is required"}), 400
+
+    result = predict_sentiment(text)
+    return jsonify(result), 200
 
 
 if __name__ == "__main__":
