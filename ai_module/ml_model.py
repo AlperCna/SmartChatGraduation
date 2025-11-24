@@ -4,6 +4,10 @@ import os
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "sentiment_model.pkl")
 VECTORIZER_PATH = os.path.join(os.path.dirname(__file__), "..", "tfidf_vectorizer.pkl")
 
+STYLE_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "style_model.pkl")
+STYLE_VECTORIZER_PATH = os.path.join(os.path.dirname(__file__), "..", "style_vectorizer.pkl")
+
+
 
 model = None
 vectorizer = None
@@ -30,5 +34,35 @@ def predict_sentiment(text: str):
 
     return {
         "sentiment": pred,
+        "confidence": confidence
+    }
+
+
+style_model = None
+style_vectorizer = None
+
+
+def load_style_model():
+    global style_model, style_vectorizer
+
+    if style_model is None or style_vectorizer is None:
+        with open(STYLE_MODEL_PATH, "rb") as f:
+            style_model = pickle.load(f)
+
+        with open(STYLE_VECTORIZER_PATH, "rb") as f:
+            style_vectorizer = pickle.load(f)
+
+    return style_model, style_vectorizer
+
+
+def predict_style(text: str):
+    model, vectorizer = load_style_model()
+
+    x = vectorizer.transform([text])
+    pred = model.predict(x)[0]
+    confidence = float(model.predict_proba(x).max())
+
+    return {
+        "style": pred,
         "confidence": confidence
     }

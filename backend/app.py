@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 import os
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 analyzer = SentimentIntensityAnalyzer()
-from ai_module.ml_model import predict_sentiment
+from ai_module.ml_model import predict_sentiment, predict_style
+from datetime import datetime
 
 
 load_dotenv()
@@ -269,6 +270,7 @@ def update_suggestion(suggestion_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+#Bitirme sonrası kısım
 
 from ai_module.ml_model import predict_sentiment
 
@@ -282,6 +284,50 @@ def predict_sentiment_route():
 
     result = predict_sentiment(text)
     return jsonify(result), 200
+
+
+@app.route("/predict_style", methods=["POST"])
+def predict_style_route():
+    data = request.get_json()
+    text = data.get("text", "")
+
+    if not text.strip():
+        return jsonify({"error": "Text is required"}), 400
+
+    result = predict_style(text)
+    return jsonify(result), 200
+
+
+@app.route("/predict", methods=["POST"])
+def predict():
+    try:
+        data = request.get_json()
+        text = data.get("text", "").strip()
+
+        if not text:
+            return jsonify({"error": "Text is required"}), 400
+
+        # 1) SENTIMENT (ML)
+        sentiment_res = predict_sentiment(text)
+
+        # 2) STYLE (ML)
+        style_res = predict_style(text)
+
+        # 3) PUNCTUATION FIX
+        fixed = suggest_punctuation(text)
+
+        return jsonify({
+            "sentiment": sentiment_res["sentiment"],
+            "sentiment_confidence": sentiment_res["confidence"],
+            "style": style_res["style"],
+            "style_confidence": style_res["confidence"],
+            "punctuation_fixed": fixed,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 
 if __name__ == "__main__":
