@@ -5,11 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ab59f5fd-a08d-4929-9a12-ff64a48a414a" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_module/ml_model.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_module/ml_model.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_module/punctuation_fixer.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_module/punctuation_fixer.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -189,7 +186,7 @@
       <workItem from="1763374840327" duration="1553000" />
       <workItem from="1763376420719" duration="5328000" />
       <workItem from="1763974019387" duration="3480000" />
-      <workItem from="1764001181945" duration="2511000" />
+      <workItem from="1764001181945" duration="3571000" />
     </task>
     <servers />
   </component>
