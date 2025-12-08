@@ -23,7 +23,7 @@ app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 CORS(app)
 
-# 📂 Medya dosyalarının kaydedileceği klasör
+#  Medya dosyalarının kaydedileceği klasör
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "..", "docs")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -169,45 +169,50 @@ def complete_text():
         print(">>> /complete endpoint çağrıldı")
         data = request.get_json()
         print("JSON veri:", data)
+
         text = data.get("text", "").strip()
         receiver_username = data.get("receiver_username", "")
         sender_id = data.get("sender_id")
         receiver_id = data.get("receiver_id")
-        print(f"Text: {text}, Receiver_username: {receiver_username}, Sender_id: {sender_id}, Receiver_id: {receiver_id}")
 
         if not text or not sender_id or not receiver_id:
-            print("!!! Eksik parametre")
             return jsonify({"error": "text, sender_id ve receiver_id zorunludur"}), 400
 
-        # Konuşma geçmişinden son 5 mesajı al
+        # ----------------------------
+        # 1. Son 5 mesajı al
+        # ----------------------------
         messages = db_service.get_messages(sender_id, receiver_id)
         last_msgs = messages[-5:]
 
-        # Konuşma geçmişini prompt formatına çevir
         history = ""
         for m in last_msgs:
             speaker = "Me" if m["sender_id"] == sender_id else receiver_username
             history += f"{speaker}: {m['content']}\n"
 
-        # 1️⃣ Üslup tespiti
-        style = detect_style(sender_id, receiver_id, last_message=text)
-        print(f"[DEBUG] Detected style: {style}")
+        # ----------------------------
+        # 2. STYLE detection (ML)
+        # ----------------------------
+        from ai_module.style_model import predict_style
+        style_result = predict_style(text)
+        style = style_result["style"]
+        print(f"[DEBUG] ML Style detected: {style}")
 
-        # 2️⃣ Mesaj duygu analizi (pozitif/negatif/nötr)
-        sentiment_prompt = f"""
-        Mesaj: "{text}"
-        Görev: Bu mesajın duygusunu sınıflandır.
-        Sadece 'positive', 'negative' veya 'neutral' olarak cevap ver.
-        """
-        sentiment_res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": sentiment_prompt}],
-            max_tokens=3
-        )
-        sentiment = sentiment_res.choices[0].message.content.strip().lower()
-        print(f"[DEBUG] Sentiment detected: {sentiment}")
+        # ilişkiler tablosunda sakla:
+        relationship = db_service.get_relationship(sender_id, receiver_id)
+        if relationship:
+            db_service.update_relationship(sender_id, receiver_id, style=style)
+        else:
+            db_service.create_relationship(sender_id, receiver_id, style, 50)
 
-        # 3️⃣ Closeness puanı güncelle
+        # ----------------------------
+        # 3. SENTIMENT detection (ML)
+        # ----------------------------
+        from ai_module.ml_model import predict_sentiment
+        sentiment_result = predict_sentiment(text)
+        sentiment = sentiment_result["sentiment"]
+        print(f"[DEBUG] ML Sentiment detected: {sentiment}")
+
+        # closeness güncelle
         delta = 0
         if sentiment == "positive":
             delta = 5
@@ -216,16 +221,24 @@ def complete_text():
 
         if delta != 0:
             db_service.adjust_closeness(sender_id, receiver_id, delta)
-            print(f"[DEBUG] Closeness score adjusted by {delta}")
+            print(f"[DEBUG] Closeness adjusted by {delta}")
 
-        # 4️⃣ GPT‑4.1-mini ile cümleyi tamamla
+        # ----------------------------
+        # 4. GPT suggestion generation (optional)
+        # ----------------------------
         prompt = f"""
-        Görev: Aşağıdaki konuşma geçmişine göre, kullanıcının son mesajını yazım hatalarını düzelterek ve '{style}' üsluba uyarlayarak tamamla.
+        Görev: Aşağıdaki konuşma geçmişine göre, kullanıcının son mesajını
+        yazım hatalarını düzelterek ve '{style}' üsluba uyarlayarak daha iyi 
+        bir mesaj önerisi üret.
+
         Konuşma geçmişi:
         {history}
-        Kullanıcının son mesajı: {text}
+
+        Kullanıcının son mesajı:
+        {text}
+
+        Sadece önerilmiş cümleyi döndür.
         """
-        print(f"[DEBUG] Prompt sent to GPT:\n{prompt}")
 
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
@@ -236,16 +249,22 @@ def complete_text():
         completion_text = response.choices[0].message.content.strip()
         print(f"[DEBUG] GPT Completion: {completion_text}")
 
-        # 5️⃣ Öneriyi DB'ye kaydet
+        # ----------------------------
+        # 5. Öneriyi DB'ye kaydet
+        # ----------------------------
         suggestion_id = db_service.insert_suggestion(sender_id, text, completion_text, style)
 
+        # ----------------------------
+        # 6. RESPONSE
+        # ----------------------------
         return jsonify({
             "suggestion_id": suggestion_id,
             "original": text,
             "completion": completion_text,
             "style": style,
-            "styled_completion": completion_text,
-            "sentiment": sentiment
+            "sentiment": sentiment,
+            "confidence_style": style_result["confidence"],
+            "confidence_sentiment": sentiment_result["confidence"]
         })
 
     except Exception as e:
@@ -253,7 +272,6 @@ def complete_text():
         print("!!! /complete hata:", str(e))
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 
 
 @app.route("/suggestions/<int:suggestion_id>", methods=["PATCH"])
