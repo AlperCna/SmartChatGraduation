@@ -325,35 +325,46 @@ def predict_style_route():
     }), 200
 
 
+from ai_module.style_adapter import detect_style
+
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
         data = request.get_json()
+
         text = data.get("text", "").strip()
+        sender_id = data.get("sender_id")
+        receiver_id = data.get("receiver_id")
 
-        if not text:
-            return jsonify({"error": "Text is required"}), 400
+        if not text or sender_id is None or receiver_id is None:
+            return jsonify({
+                "error": "text, sender_id, receiver_id are required"
+            }), 400
 
-        # 1) SENTIMENT (ML)
+        # 1️⃣ SENTIMENT (ML – KALIYOR)
         sentiment_res = predict_sentiment(text)
 
-        # 2) STYLE (ML)
-        style_res = predict_style(text)
+        # 2️⃣ STYLE (GPT + DB – YENİ)
+        style = detect_style(
+            sender_id=sender_id,
+            receiver_id=receiver_id,
+            last_message=text
+        )
 
-        # 3) PUNCTUATION FIX
+        # 3️⃣ PUNCTUATION FIX (KALIYOR)
         fixed = suggest_punctuation(text)
 
         return jsonify({
             "sentiment": sentiment_res["sentiment"],
             "sentiment_confidence": sentiment_res["confidence"],
-            "style": style_res["style"],
-            "style_confidence": style_res["confidence"],
+            "style": style,
             "punctuation_fixed": fixed,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 
 
