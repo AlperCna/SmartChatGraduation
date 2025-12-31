@@ -4,34 +4,33 @@ from backend.services import db_service
 from ai_module.style_detector_gpt import detect_style_gpt
 
 
-def detect_style(sender_id, receiver_id, last_message=None):
-    """
-    GPT tabanlı stil tespiti.
-    DB ZORUNLUDUR.
-    """
+def detect_style(sender_id, receiver_id, last_message):
+    message_style = detect_style_gpt(last_message)
 
-    # 1️⃣ Relationship mutlaka DB'den okunur
     relationship = db_service.get_relationship(sender_id, receiver_id)
 
-    if relationship and relationship.get("style"):
-        return relationship["style"]
+    if not relationship:
+        db_service.create_relationship(
+            sender_id,
+            receiver_id,
+            message_style,
+            confidence=60
+        )
+        relationship_style = message_style
+    else:
+        relationship_style = relationship.get("style") or message_style
 
-    # 2️⃣ Relationship yoksa GPT ile tespit edilir
-    if last_message:
-        detected_style = detect_style_gpt(last_message)
-
-        if relationship:
-            db_service.update_relationship(
-                sender_id, receiver_id, style=detected_style
+        if message_style != relationship_style:
+            db_service.soft_update_style(
+                sender_id,
+                receiver_id,
+                new_style=message_style
             )
-        else:
-            db_service.create_relationship(
-                sender_id, receiver_id, detected_style, 50
-            )
 
-        return detected_style
-
-    return "neutral"
+    return {
+        "message_style": message_style,
+        "relationship_style": relationship_style
+    }
 
 
 def adapt_style(text, style):

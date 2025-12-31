@@ -344,8 +344,8 @@ def predict():
         # 1️⃣ SENTIMENT (ML – KALIYOR)
         sentiment_res = predict_sentiment(text)
 
-        # 2️⃣ STYLE (GPT + DB – YENİ)
-        style = detect_style(
+        # 2️⃣ STYLE (GPT + DB – HİBRİT)
+        style_res = detect_style(
             sender_id=sender_id,
             receiver_id=receiver_id,
             last_message=text
@@ -357,13 +357,18 @@ def predict():
         return jsonify({
             "sentiment": sentiment_res["sentiment"],
             "sentiment_confidence": sentiment_res["confidence"],
-            "style": style,
+
+            # 🔥 ÖNEMLİ AYRIM
+            "style": style_res["message_style"],
+            "relationship_style": style_res["relationship_style"],
+
             "punctuation_fixed": fixed,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 
 
