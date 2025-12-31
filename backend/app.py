@@ -166,21 +166,21 @@ def upload_media():
 @app.route("/complete", methods=["POST"])
 def complete_text():
     try:
-        print(">>> /complete endpoint çağrıldı")
         data = request.get_json()
-        print("JSON veri:", data)
 
         text = data.get("text", "").strip()
-        receiver_username = data.get("receiver_username", "")
         sender_id = data.get("sender_id")
         receiver_id = data.get("receiver_id")
+        receiver_username = data.get("receiver_username", "Other")
 
-        if not text or not sender_id or not receiver_id:
-            return jsonify({"error": "text, sender_id ve receiver_id zorunludur"}), 400
+        if not text or sender_id is None or receiver_id is None:
+            return jsonify({
+                "error": "text, sender_id, receiver_id are required"
+            }), 400
 
-        # ----------------------------
-        # 1. Son 5 mesajı al
-        # ----------------------------
+        # --------------------------------------------------
+        # 1️⃣ SON 5 MESAJI AL (KONUŞMA CONTEXT)
+        # --------------------------------------------------
         messages = db_service.get_messages(sender_id, receiver_id)
         last_msgs = messages[-5:]
 
@@ -189,30 +189,28 @@ def complete_text():
             speaker = "Me" if m["sender_id"] == sender_id else receiver_username
             history += f"{speaker}: {m['content']}\n"
 
-        # ----------------------------
-        # 2. STYLE detection (ML)
-        # ----------------------------
-        from ai_module.style_model import predict_style
-        style_result = predict_style(text)
-        style = style_result["style"]
-        print(f"[DEBUG] ML Style detected: {style}")
+        # --------------------------------------------------
+        # 2️⃣ STYLE DETECTION (HIBRIT – GPT + RELATIONSHIP)
+        # --------------------------------------------------
+        style_res = detect_style(
+            sender_id=sender_id,
+            receiver_id=receiver_id,
+            last_message=text
+        )
 
-        # ilişkiler tablosunda sakla:
-        relationship = db_service.get_relationship(sender_id, receiver_id)
-        if relationship:
-            db_service.update_relationship(sender_id, receiver_id, style=style)
-        else:
-            db_service.create_relationship(sender_id, receiver_id, style, 50)
+        message_style = style_res["message_style"]
+        relationship_style = style_res["relationship_style"]
 
-        # ----------------------------
-        # 3. SENTIMENT detection (ML)
-        # ----------------------------
-        from ai_module.ml_model import predict_sentiment
-        sentiment_result = predict_sentiment(text)
-        sentiment = sentiment_result["sentiment"]
-        print(f"[DEBUG] ML Sentiment detected: {sentiment}")
+        # --------------------------------------------------
+        # 3️⃣ SENTIMENT DETECTION (ML)
+        # --------------------------------------------------
+        sentiment_res = predict_sentiment(text)
+        sentiment = sentiment_res["sentiment"]
+        sentiment_confidence = sentiment_res["confidence"]
 
-        # closeness güncelle
+        # --------------------------------------------------
+        # 4️⃣ CLOSENESS SCORE GÜNCELLEME (SADECE BURADA)
+        # --------------------------------------------------
         delta = 0
         if sentiment == "positive":
             delta = 5
@@ -221,57 +219,66 @@ def complete_text():
 
         if delta != 0:
             db_service.adjust_closeness(sender_id, receiver_id, delta)
-            print(f"[DEBUG] Closeness adjusted by {delta}")
 
-        # ----------------------------
-        # 4. GPT suggestion generation (optional)
-        # ----------------------------
+        # --------------------------------------------------
+        # 5️⃣ GPT İLE MESAJ TAMAMLAMA / ÖNERİ
+        # --------------------------------------------------
         prompt = f"""
-        Görev: Aşağıdaki konuşma geçmişine göre, kullanıcının son mesajını
-        yazım hatalarını düzelterek ve '{style}' üsluba uyarlayarak daha iyi 
-        bir mesaj önerisi üret.
+Görev:
+Aşağıdaki konuşma geçmişini dikkate alarak,
+kullanıcının son mesajını yazım hataları düzeltilmiş,
+'{relationship_style}' üsluba uygun şekilde yeniden yaz.
 
-        Konuşma geçmişi:
-        {history}
+Konuşma Geçmişi:
+{history}
 
-        Kullanıcının son mesajı:
-        {text}
+Kullanıcının Mesajı:
+{text}
 
-        Sadece önerilmiş cümleyi döndür.
-        """
+Sadece önerilen cümleyi döndür.
+"""
 
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=50
+            temperature=0.4,
+            max_tokens=60
         )
 
         completion_text = response.choices[0].message.content.strip()
-        print(f"[DEBUG] GPT Completion: {completion_text}")
 
-        # ----------------------------
-        # 5. Öneriyi DB'ye kaydet
-        # ----------------------------
-        suggestion_id = db_service.insert_suggestion(sender_id, text, completion_text, style)
+        # --------------------------------------------------
+        # 6️⃣ ÖNERİYİ VERİTABANINA KAYDET
+        # --------------------------------------------------
+        suggestion_id = db_service.insert_suggestion(
+            sender_id,
+            original_text=text,
+            suggested_text=completion_text,
+            style=relationship_style
+        )
 
-        # ----------------------------
-        # 6. RESPONSE
-        # ----------------------------
+        # --------------------------------------------------
+        # 7️⃣ RESPONSE
+        # --------------------------------------------------
         return jsonify({
             "suggestion_id": suggestion_id,
             "original": text,
             "completion": completion_text,
-            "style": style,
+
+            # 🔥 ANALYSIS
+            "message_style": message_style,
+            "relationship_style": relationship_style,
             "sentiment": sentiment,
-            "confidence_style": style_result["confidence"],
-            "confidence_sentiment": sentiment_result["confidence"]
-        })
+            "sentiment_confidence": sentiment_confidence,
+
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }), 200
 
     except Exception as e:
         import traceback
-        print("!!! /complete hata:", str(e))
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
 
 
 @app.route("/suggestions/<int:suggestion_id>", methods=["PATCH"])
