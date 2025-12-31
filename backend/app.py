@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 import os
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 analyzer = SentimentIntensityAnalyzer()
-from ai_module.ml_model import predict_sentiment, predict_style
+from ai_module.ml_model import predict_sentiment , predict_style
 from datetime import datetime
 
 
@@ -304,16 +304,25 @@ def predict_sentiment_route():
     return jsonify(result), 200
 
 
+from ai_module.style_adapter import detect_style
+
 @app.route("/predict_style", methods=["POST"])
 def predict_style_route():
     data = request.get_json()
-    text = data.get("text", "")
+    text = data.get("text", "").strip()
+    sender_id = data.get("sender_id")
+    receiver_id = data.get("receiver_id")
 
-    if not text.strip():
-        return jsonify({"error": "Text is required"}), 400
+    if not text or sender_id is None or receiver_id is None:
+        return jsonify({"error": "text, sender_id, receiver_id are required"}), 400
 
-    result = predict_style(text)
-    return jsonify(result), 200
+    # ❗ DB yoksa burada exception fırlatır (istenen davranış)
+    style = detect_style(sender_id, receiver_id, last_message=text)
+
+    return jsonify({
+        "style": style,
+        "source": "gpt"
+    }), 200
 
 
 @app.route("/predict", methods=["POST"])

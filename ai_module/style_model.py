@@ -10,6 +10,10 @@ vectorizer = None
 def load_style_model():
     global model, vectorizer
 
+
+    print(">>> USING STYLE MODEL FILE:", MODEL_PATH)
+    print(">>> MODEL EXISTS?", os.path.exists(MODEL_PATH))
+
     if model is None or vectorizer is None:
         model = joblib.load(MODEL_PATH)
         vectorizer = joblib.load(VECTORIZER_PATH)
@@ -18,6 +22,7 @@ def load_style_model():
 
 
 def predict_style(text: str):
+    print(">>> predict_style() FROM style_model.py IS RUNNING")
     model, vectorizer = load_style_model()
 
     X = vectorizer.transform([text])

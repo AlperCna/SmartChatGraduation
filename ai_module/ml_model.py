@@ -15,6 +15,8 @@ vectorizer = None
 def load_sentiment_model():
     global model, vectorizer
 
+
+
     if model is None or vectorizer is None:
         with open(MODEL_PATH, "rb") as f:
             model = pickle.load(f)
@@ -43,6 +45,8 @@ style_vectorizer = None
 
 
 def load_style_model():
+    print(">>> USING STYLE MODEL FILE:", MODEL_PATH)
+    print(">>> MODEL EXISTS?", os.path.exists(MODEL_PATH))
     global style_model, style_vectorizer
 
     if style_model is None or style_vectorizer is None:
@@ -56,6 +60,7 @@ def load_style_model():
 
 
 def predict_style(text: str):
+    print(">>> predict_style() FROM style_model.py IS RUNNING")
     model, vectorizer = load_style_model()
 
     x = vectorizer.transform([text])
