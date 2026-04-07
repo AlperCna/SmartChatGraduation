@@ -6,7 +6,6 @@
   <component name="ChangeListManager">
     <list default="true" id="ab59f5fd-a08d-4929-9a12-ff64a48a414a" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -43,32 +42,32 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "Python.app.executor": "Run",
-    "Python.load.executor": "Run",
-    "Python.new_datasetimplementor.executor": "Run",
-    "Python.punctuation_fixer.executor": "Run",
-    "Python.script_clean_style_dataset.executor": "Run",
-    "Python.style dataset.executor": "Run",
-    "Python.style_adapter.executor": "Run",
-    "Python.style_train_new.executor": "Run",
-    "Python.styledataset.executor": "Run",
-    "Python.test.executor": "Run",
-    "Python.train_style_model.executor": "Run",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "main",
-    "last_opened_file_path": "C:/Users/Alper/PycharmProjects/SmartChatGraduation",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Python.app.executor&quot;: &quot;Run&quot;,
+    &quot;Python.load.executor&quot;: &quot;Run&quot;,
+    &quot;Python.new_datasetimplementor.executor&quot;: &quot;Run&quot;,
+    &quot;Python.punctuation_fixer.executor&quot;: &quot;Run&quot;,
+    &quot;Python.script_clean_style_dataset.executor&quot;: &quot;Run&quot;,
+    &quot;Python.style dataset.executor&quot;: &quot;Run&quot;,
+    &quot;Python.style_adapter.executor&quot;: &quot;Run&quot;,
+    &quot;Python.style_train_new.executor&quot;: &quot;Run&quot;,
+    &quot;Python.styledataset.executor&quot;: &quot;Run&quot;,
+    &quot;Python.test.executor&quot;: &quot;Run&quot;,
+    &quot;Python.train_style_model.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/Alper/PycharmProjects/SmartChatGraduation&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\Alper\PycharmProjects\SmartChatGraduation" />
@@ -241,7 +240,9 @@
       <workItem from="1765031333869" duration="1016000" />
       <workItem from="1765225945515" duration="766000" />
       <workItem from="1765228671347" duration="246000" />
-      <workItem from="1767175685529" duration="11460000" />
+      <workItem from="1767175685529" duration="14620000" />
+      <workItem from="1767259479169" duration="1263000" />
+      <workItem from="1767514335100" duration="660000" />
     </task>
     <servers />
   </component>

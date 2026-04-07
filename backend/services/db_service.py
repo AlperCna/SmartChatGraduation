@@ -98,13 +98,32 @@ def get_user_by_id(user_id):
 def get_chat_partners(user_id):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT DISTINCT u.user_id, u.username
+    # Daha gelişmiş sorgu: Son mesajı ve zamanını da getirir
+    sql = """
+        SELECT u.user_id, u.username,
+               (SELECT content FROM messages
+                WHERE (sender_id = %s AND receiver_id = u.user_id)
+                   OR (sender_id = u.user_id AND receiver_id = %s)
+                ORDER BY timestamp DESC LIMIT 1) as last_message,
+               (SELECT timestamp FROM messages
+                WHERE (sender_id = %s AND receiver_id = u.user_id)
+                   OR (sender_id = u.user_id AND receiver_id = %s)
+                ORDER BY timestamp DESC LIMIT 1) as last_time
         FROM users u
-        JOIN messages m ON (u.user_id = m.sender_id OR u.user_id = m.receiver_id)
-        WHERE %s IN (m.sender_id, m.receiver_id) AND u.user_id != %s
-    """, (user_id, user_id))
+        WHERE u.user_id IN (
+            SELECT DISTINCT CASE WHEN sender_id = %s THEN receiver_id ELSE sender_id END
+            FROM messages
+            WHERE sender_id = %s OR receiver_id = %s
+        )
+    """
+    cursor.execute(sql, (user_id, user_id, user_id, user_id, user_id, user_id, user_id))
     result = cursor.fetchall()
+    
+    # Zaman formatını UI için düzenle (isteğe bağlı)
+    for row in result:
+        if row["last_time"]:
+            row["last_time"] = str(row["last_time"])
+            
     cursor.close()
     conn.close()
     return result
