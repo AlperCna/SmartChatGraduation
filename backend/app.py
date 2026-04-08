@@ -86,7 +86,7 @@ def signup():
             return jsonify({"error": "Username is already taken"}), 409
         hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         db_service.insert_user(username, email, hashed_pw)
-        return jsonify({"message": "User created successfully"}), 201
+        return jsonify({"success": True, "message": "User created successfully"}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -147,19 +147,30 @@ def upload_media():
 
     file = request.files['file']
     media_type = request.form.get("media_type", "image")
-    message_id = request.form.get("message_id")  # opsiyonel olabilir
+    sender_id = request.form.get("sender_id")
+    receiver_id = request.form.get("receiver_id")
 
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
+
+    if not sender_id or not receiver_id:
+        return jsonify({"error": "sender_id and receiver_id are required"}), 400
 
     filename = secure_filename(file.filename)
     save_path = os.path.join(UPLOAD_FOLDER, filename)
     file.save(save_path)
 
-    # veritabanına kayıt
+    # Auto-create a placeholder message for this media
+    message_id = db_service.insert_message(int(sender_id), int(receiver_id), "[Media]")
+
+    # Link the media record to the newly created message
     db_service.insert_media(message_id, media_type, f"docs/{filename}")
 
-    return jsonify({"message": "Media uploaded", "file_path": f"docs/{filename}"})
+    return jsonify({
+        "message": "Media uploaded",
+        "file_path": f"docs/{filename}",
+        "message_id": message_id
+    })
 
 
 
