@@ -1,4 +1,8 @@
-from flask import Flask, jsonify, request
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from flask import Flask, jsonify, request, send_from_directory
 from backend.services import db_service
 from flask_cors import CORS
 import bcrypt
@@ -31,6 +35,10 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 def hello():
     return {"message": "SmartChat Flask sunucusu çalışıyor."}
 
+@app.route('/docs/<path:filename>')
+def serve_docs(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
 @app.route("/users", methods=["GET"])
 def list_users():
     return jsonify(db_service.get_users())
@@ -51,11 +59,14 @@ def send_message():
     data = request.get_json()
     sender_id = data.get("sender_id")
     receiver_id = data.get("receiver_id")
+    group_id = data.get("group_id")
     content = data.get("content")
-    if not sender_id or not receiver_id or not content:
-        return jsonify({"error": "sender_id, receiver_id ve content zorunludur."}), 400
+    if not sender_id or not content:
+        return jsonify({"error": "sender_id and content are required."}), 400
+    if not receiver_id and not group_id:
+        return jsonify({"error": "either receiver_id or group_id is required."}), 400
 
-    message_id = db_service.insert_message(sender_id, receiver_id, content)
+    message_id = db_service.insert_message(sender_id, receiver_id, content, group_id)
     return jsonify({
         "message": "Mesaj başarıyla gönderildi.",
         "message_id": message_id
@@ -66,10 +77,15 @@ def send_message():
 def list_messages():
     sender_id = request.args.get("sender_id")
     receiver_id = request.args.get("receiver_id")
-    if not sender_id or not receiver_id:
-        return jsonify({"error": "sender_id ve receiver_id zorunludur."}), 400
-
-    messages = db_service.get_messages(sender_id, receiver_id)
+    group_id = request.args.get("group_id")
+    
+    if group_id:
+        messages = db_service.get_messages(sender_id=None, receiver_id=None, group_id=group_id)
+    else:
+        if not sender_id or not receiver_id:
+            return jsonify({"error": "sender_id and receiver_id zorunludur (if not group_id)."}), 400
+        messages = db_service.get_messages(sender_id, receiver_id)
+        
     return jsonify({"messages": messages})
 @app.route("/signup", methods=["POST"])
 def signup():
@@ -149,19 +165,27 @@ def upload_media():
     media_type = request.form.get("media_type", "image")
     sender_id = request.form.get("sender_id")
     receiver_id = request.form.get("receiver_id")
+    group_id = request.form.get("group_id")
 
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
-    if not sender_id or not receiver_id:
-        return jsonify({"error": "sender_id and receiver_id are required"}), 400
+    if not sender_id:
+        return jsonify({"error": "sender_id is required"}), 400
+    if not receiver_id and not group_id:
+        return jsonify({"error": "either receiver_id or group_id is required"}), 400
 
     filename = secure_filename(file.filename)
     save_path = os.path.join(UPLOAD_FOLDER, filename)
     file.save(save_path)
 
     # Auto-create a placeholder message for this media
-    message_id = db_service.insert_message(int(sender_id), int(receiver_id), "[Media]")
+    message_id = db_service.insert_message(
+        sender_id=int(sender_id),
+        receiver_id=int(receiver_id) if receiver_id else None,
+        content="[Media]",
+        group_id=int(group_id) if group_id != "null" and group_id else None
+    )
 
     # Link the media record to the newly created message
     db_service.insert_media(message_id, media_type, f"docs/{filename}")
@@ -390,6 +414,41 @@ def predict():
 
 
 
+
+# Group REST APIs
+@app.route("/groups", methods=["POST"])
+def create_group():
+    data = request.get_json()
+    group_name = data.get("group_name")
+    group_picture = data.get("group_picture")
+    admin_id = data.get("admin_id")
+    member_ids = data.get("member_ids", [])
+    
+    if not group_name or not admin_id:
+        return jsonify({"error": "group_name and admin_id are required"}), 400
+        
+    group_id = db_service.create_group(group_name, admin_id, member_ids, group_picture)
+    return jsonify({"success": True, "group_id": group_id}), 201
+
+@app.route("/groups/<int:group_id>", methods=["GET"])
+def get_group(group_id):
+    group = db_service.get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+    return jsonify({"success": True, "group": group})
+
+@app.route("/groups/<int:group_id>", methods=["PATCH"])
+def update_group(group_id):
+    data = request.get_json()
+    group_name = data.get("group_name")
+    group_picture = data.get("group_picture")
+    db_service.update_group(group_id, group_name, group_picture)
+    return jsonify({"success": True})
+
+@app.route("/groups/<int:group_id>/members/<int:user_id>", methods=["DELETE"])
+def remove_member(group_id, user_id):
+    db_service.remove_group_member(group_id, user_id)
+    return jsonify({"success": True})
 
 if __name__ == "__main__":
     app.run(debug=True)
