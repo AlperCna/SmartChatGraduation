@@ -35,11 +35,15 @@ def get_users():
     return users
 
 
-def insert_message(sender_id, receiver_id, content):
+def insert_message(sender_id, receiver_id, content, group_id=None):
     conn = get_db_connection()
     cursor = conn.cursor()
-    sql = "INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)"
-    cursor.execute(sql, (sender_id, receiver_id, content))
+    if group_id:
+        sql = "INSERT INTO messages (sender_id, receiver_id, content, group_id) VALUES (%s, %s, %s, %s)"
+        cursor.execute(sql, (sender_id, None, content, group_id))
+    else:
+        sql = "INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)"
+        cursor.execute(sql, (sender_id, receiver_id, content))
     message_id = cursor.lastrowid
     conn.commit()
     cursor.close()
@@ -47,18 +51,30 @@ def insert_message(sender_id, receiver_id, content):
     return message_id
 
 
-def get_messages(sender_id, receiver_id):
+def get_messages(sender_id, receiver_id=None, group_id=None):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    sql = """
-        SELECT m.*, media.file_path, media.media_type
-        FROM messages m
-        LEFT JOIN media ON m.message_id = media.message_id
-        WHERE (m.sender_id = %s AND m.receiver_id = %s)
-           OR (m.sender_id = %s AND m.receiver_id = %s)
-        ORDER BY m.timestamp ASC
-    """
-    cursor.execute(sql, (sender_id, receiver_id, receiver_id, sender_id))
+    if group_id:
+        sql = """
+            SELECT m.*, media.file_path, media.media_type, u.username as sender_username
+            FROM messages m
+            LEFT JOIN media ON m.message_id = media.message_id
+            JOIN users u ON m.sender_id = u.user_id
+            WHERE m.group_id = %s
+            ORDER BY m.timestamp ASC
+        """
+        cursor.execute(sql, (group_id,))
+    else:
+        sql = """
+            SELECT m.*, media.file_path, media.media_type, u.username as sender_username
+            FROM messages m
+            LEFT JOIN media ON m.message_id = media.message_id
+            JOIN users u ON m.sender_id = u.user_id
+            WHERE (m.sender_id = %s AND m.receiver_id = %s AND m.group_id IS NULL)
+               OR (m.sender_id = %s AND m.receiver_id = %s AND m.group_id IS NULL)
+            ORDER BY m.timestamp ASC
+        """
+        cursor.execute(sql, (sender_id, receiver_id, receiver_id, sender_id))
     messages = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -98,25 +114,41 @@ def get_user_by_id(user_id):
 def get_chat_partners(user_id):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    # Daha gelişmiş sorgu: Son mesajı ve zamanını da getirir
+    # Daha gelişmiş sorgu: Son mesajı ve zamanını da getirir, grup ve normal sohbetleri birleştirir
     sql = """
         SELECT u.user_id, u.username,
                (SELECT content FROM messages
-                WHERE (sender_id = %s AND receiver_id = u.user_id)
-                   OR (sender_id = u.user_id AND receiver_id = %s)
+                WHERE ((sender_id = %s AND receiver_id = u.user_id)
+                   OR (sender_id = u.user_id AND receiver_id = %s))
+                   AND group_id IS NULL
                 ORDER BY timestamp DESC LIMIT 1) as last_message,
                (SELECT timestamp FROM messages
-                WHERE (sender_id = %s AND receiver_id = u.user_id)
-                   OR (sender_id = u.user_id AND receiver_id = %s)
-                ORDER BY timestamp DESC LIMIT 1) as last_time
+                WHERE ((sender_id = %s AND receiver_id = u.user_id)
+                   OR (sender_id = u.user_id AND receiver_id = %s))
+                   AND group_id IS NULL
+                ORDER BY timestamp DESC LIMIT 1) as last_time,
+               0 as is_group
         FROM users u
         WHERE u.user_id IN (
             SELECT DISTINCT CASE WHEN sender_id = %s THEN receiver_id ELSE sender_id END
             FROM messages
-            WHERE sender_id = %s OR receiver_id = %s
+            WHERE (sender_id = %s OR receiver_id = %s) AND group_id IS NULL
         )
+        UNION
+        SELECT g.group_id as user_id, g.group_name as username,
+               (SELECT content FROM messages
+                WHERE messages.group_id = g.group_id
+                ORDER BY timestamp DESC LIMIT 1) as last_message,
+               (SELECT timestamp FROM messages
+                WHERE messages.group_id = g.group_id
+                ORDER BY timestamp DESC LIMIT 1) as last_time,
+               1 as is_group
+        FROM `groups` g
+        JOIN group_members gm ON g.group_id = gm.group_id
+        WHERE gm.user_id = %s
+        ORDER BY last_time DESC
     """
-    cursor.execute(sql, (user_id, user_id, user_id, user_id, user_id, user_id, user_id))
+    cursor.execute(sql, (user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id))
     result = cursor.fetchall()
     
     # Zaman formatını UI için düzenle (isteğe bağlı)
@@ -240,3 +272,64 @@ def adjust_closeness(user1_id, user2_id, delta):
     else:
         create_relationship(user1_id, user2_id, "neutral", 50)
         adjust_closeness(user1_id, user2_id, delta)
+
+# Group Functions
+def create_group(group_name, admin_id, member_ids, group_picture=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    sql = "INSERT INTO `groups` (group_name, group_picture, admin_id) VALUES (%s, %s, %s)"
+    cursor.execute(sql, (group_name, group_picture, admin_id))
+    group_id = cursor.lastrowid
+    
+    # Add members including admin
+    members = set(member_ids)
+    members.add(admin_id)
+    
+    member_sql = "INSERT INTO group_members (group_id, user_id) VALUES (%s, %s)"
+    cursor.executemany(member_sql, [(group_id, m) for m in members])
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return group_id
+
+def get_group(group_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM `groups` WHERE group_id = %s", (group_id,))
+    group = cursor.fetchone()
+    
+    if group:
+        cursor.execute("SELECT u.user_id, u.username FROM users u JOIN group_members gm ON u.user_id = gm.user_id WHERE gm.group_id = %s", (group_id,))
+        group['members'] = cursor.fetchall()
+        
+    cursor.close()
+    conn.close()
+    return group
+
+def update_group(group_id, group_name=None, group_picture=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    fields = []
+    values = []
+    if group_name is not None:
+        fields.append("group_name = %s")
+        values.append(group_name)
+    if group_picture is not None:
+        fields.append("group_picture = %s")
+        values.append(group_picture)
+        
+    if fields:
+        sql = f"UPDATE `groups` SET {', '.join(fields)} WHERE group_id = %s"
+        values.append(group_id)
+        cursor.execute(sql, tuple(values))
+        conn.commit()
+    cursor.close()
+    conn.close()
+
+def remove_group_member(group_id, user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
