@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask import Flask, jsonify, request, send_from_directory
 from backend.services import db_service
 from flask_cors import CORS
@@ -26,6 +27,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 #  Medya dosyalarının kaydedileceği klasör
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "..", "docs")
@@ -450,5 +452,71 @@ def remove_member(group_id, user_id):
     db_service.remove_group_member(group_id, user_id)
     return jsonify({"success": True})
 
+# -------------------------------
+# SOCKET EVENTS (TEST)
+# -------------------------------
+
+@socketio.on("connect")
+def handle_connect():
+    print("Bir kullanıcı bağlandı")
+    emit("connected", {"message": "Socket bağlantısı kuruldu"})
+
+@socketio.on("disconnect")
+def handle_disconnect():
+    print("Bir kullanıcı ayrıldı")
+
+@socketio.on("join_room")
+def handle_join_room(data):
+    user1 = data.get("user1")
+    user2 = data.get("user2")
+    if user1 and user2:
+        room_name = f"room_{min(user1, user2)}_{max(user1, user2)}"
+        join_room(room_name)
+        print(f"Kullanıcı {room_name} odasına katıldı")
+
+@socketio.on("send_message")
+def handle_send_message(data):
+    sender_id = data.get("sender_id")
+    receiver_id = data.get("receiver_id")
+    group_id = data.get("group_id")
+    content = data.get("content")
+
+    if not sender_id or not content:
+        return
+    
+    try:
+        from backend.services import db_service
+        user = db_service.get_user_by_id(sender_id)
+        sender_username = user['username'] if user else 'Unknown'
+        
+        message_id = db_service.insert_message(sender_id, receiver_id, content, group_id)
+        
+        message_data = {
+            "message_id": message_id,
+            "sender_id": sender_id,
+            "receiver_id": receiver_id,
+            "group_id": group_id,
+            "content": content,
+            "sender_username": sender_username,
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }
+        
+        if group_id:
+            # Emit to all users, client filters it
+            emit("new_message", message_data, broadcast=True)
+        else:
+            room_name = f"room_{min(sender_id, receiver_id)}_{max(sender_id, receiver_id)}"
+            emit("new_message", message_data, room=room_name)
+    except Exception as e:
+        print("Socket send_message error:", e)
+
+@socketio.on("typing")
+def handle_typing(data):
+    sender_id = data.get("sender_id")
+    receiver_id = data.get("receiver_id")
+    if sender_id and receiver_id:
+        room_name = f"room_{min(sender_id, receiver_id)}_{max(sender_id, receiver_id)}"
+        emit("typing", {"sender_id": sender_id}, room=room_name, include_self=False)
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
