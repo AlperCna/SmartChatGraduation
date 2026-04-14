@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  smartchat_backend:
+    build: .
+    container_name: smartchat_backend
+    ports:
+      - "5000:5000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DB_HOST=${DB_HOST}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_PORT=${DB_PORT}
+    volumes:
+      - ./docs:/app/docs  # Keep uploaded media persistent
+    restart: always
+
+# Eğer ileride MySQL'i de docker'a almak istersen burayı açabilirsin:
+#   db:
+#     image: mysql:8.0
+#     environment:
+#       MYSQL_ROOT_PASSWORD: root
+#       MYSQL_DATABASE: smartchat
+#     ports:
+#       - "3307:3306"
