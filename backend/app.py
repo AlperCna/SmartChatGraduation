@@ -451,7 +451,62 @@ def predict():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/smart_replies", methods=["POST"])
+def smart_replies():
+    try:
+        import json
+        data = request.get_json()
+        sender_id = data.get("sender_id")
+        receiver_id = data.get("receiver_id")
+        last_message = data.get("last_message", "").strip()
 
+        if not sender_id or not receiver_id or not last_message:
+            return jsonify({"error": "sender_id, receiver_id and last_message are required"}), 400
+
+        # We need the relationship style
+        style_res = detect_style(sender_id, receiver_id, last_message)
+        relationship_style = style_res.get("relationship_style", "Formal")
+
+        prompt = f"""
+Görev:
+Karşı taraf şu mesajı gönderdi: "{last_message}"
+Sen, {sender_id} numaralı kullanıcısın ve aranızdaki iletişim tarzı (closeness stili): '{relationship_style}'.
+Buna uygun, cevap olarak gönderilebilecek 3 farklı, KISA (2-5 kelime), doğal, Türkçe "anında yanıt" (quick reply) alternatifi üret.
+Lütfen sadece JSON formatında bir liste (array) döndür. Başka hiçbir açıklama veya markdown ekleme.
+Örnek:
+["Teşekkürler", "Harika fikir!", "Daha sonra konuşalım"]
+"""
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.6,
+            max_tokens=60
+        )
+
+        content = response.choices[0].message.content.strip()
+        
+        # Parse output
+        if content.startswith("```json"):
+            content = content[7:-3].strip()
+        elif content.startswith("```"):
+            content = content[3:-3].strip()
+            
+        try:
+            replies = json.loads(content)
+        except json.JSONDecodeError:
+            import re
+            matches = re.findall(r'"([^"]*)"', content)
+            replies = matches if len(matches) > 0 else []
+
+        if not isinstance(replies, list):
+            replies = []
+            
+        return jsonify({"replies": replies[:3]}), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 # Group REST APIs
