@@ -16,7 +16,8 @@ from dotenv import load_dotenv
 import os
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 analyzer = SentimentIntensityAnalyzer()
-from ai_module.ml_model import predict_sentiment , predict_style
+from ai_module.ml_model import predict_sentiment, predict_style, load_sentiment_model, load_style_model
+import threading
 from datetime import datetime
 
 
@@ -32,6 +33,18 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 #  Medya dosyalarının kaydedileceği klasör
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "..", "docs")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# -------------------------------------------------------------------
+# ML MODELLERİNİ ÖN BELLEĞE YÜKLE (PRE-LOADING)
+# -------------------------------------------------------------------
+print(">> Başlatılıyor: ML Modelleri RAM'e yükleniyor (Pre-loading)...")
+try:
+    load_sentiment_model()
+    load_style_model()
+    print(">> BAŞARILI: ML Modelleri kullanıma hazır!")
+except Exception as e:
+    print(f">> HATA: ML Modelleri yüklenemedi: {e}")
+# -------------------------------------------------------------------
 
 @app.route("/hello", methods=["GET"])
 def hello():
@@ -69,6 +82,19 @@ def send_message():
         return jsonify({"error": "either receiver_id or group_id is required."}), 400
 
     message_id = db_service.insert_message(sender_id, receiver_id, content, group_id)
+
+    if not group_id:
+        sentiment_res = predict_sentiment(content)
+        sentiment = sentiment_res.get("sentiment")
+        delta = 0
+        if sentiment == "positive":
+            delta = 5
+        elif sentiment == "negative":
+            delta = -5
+        
+        if delta != 0:
+            db_service.adjust_closeness(sender_id, receiver_id, delta)
+
     return jsonify({
         "message": "Mesaj başarıyla gönderildi.",
         "message_id": message_id
@@ -156,6 +182,17 @@ def get_user_by_id(user_id):
 @app.route("/chat_partners/<int:user_id>", methods=["GET"])
 def chat_partners(user_id):
     return jsonify(db_service.get_chat_partners(user_id))
+
+@app.route("/relationships/<int:user1_id>/<int:user2_id>/history", methods=["GET"])
+def get_relationship_history_route(user1_id, user2_id):
+    history = db_service.get_relationship_history(user1_id, user2_id)
+    relationship = db_service.get_relationship(user1_id, user2_id)
+    current_score = relationship["closeness_score"] if relationship else 50
+    return jsonify({
+        "success": True,
+        "current_score": current_score,
+        "history": history
+    })
 
 # 📤 Yeni: Fotoğraf/ses/video medya dosyası yükleme
 @app.route("/upload_media", methods=["POST"])
@@ -500,6 +537,21 @@ def handle_send_message(data):
             "sender_username": sender_username,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
+        
+        # Sadece özel mesajlarda puan güncelle
+        if not group_id:
+            from ai_module.ml_model import predict_sentiment
+            sentiment_res = predict_sentiment(content)
+            sentiment = sentiment_res.get("sentiment")
+            
+            delta = 0
+            if sentiment == "positive":
+                delta = 5
+            elif sentiment == "negative":
+                delta = -5
+                
+            if delta != 0:
+                db_service.adjust_closeness(sender_id, receiver_id, delta)
         
         if group_id:
             # Emit to all users, client filters it

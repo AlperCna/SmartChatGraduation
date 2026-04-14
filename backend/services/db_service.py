@@ -2,17 +2,26 @@ import mysql.connector
 from dotenv import load_dotenv
 import os
 
+from mysql.connector import pooling
+
 load_dotenv()  # ..env dosyasını yükle
 
+db_pool = None
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME"),
-        port=int(os.getenv("DB_PORT"))
-    )
+    global db_pool
+    if db_pool is None:
+        db_pool = pooling.MySQLConnectionPool(
+            pool_name="smartchat_pool",
+            pool_size=5,
+            pool_reset_session=True,
+            host=os.getenv("DB_HOST", "localhost"),
+            user=os.getenv("DB_USER", "root"),
+            password=os.getenv("DB_PASSWORD", ""),
+            database=os.getenv("DB_NAME", "smartchat"),
+            port=int(os.getenv("DB_PORT", 3306))
+        )
+    return db_pool.get_connection()
 
 
 def insert_user(username, email, password_hash):
@@ -255,6 +264,39 @@ def update_relationship(user1_id, user2_id, style=None, closeness_score=None):
     cursor.close()
     conn.close()
 
+def insert_relationship_history(user1_id, user2_id, closeness_score):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    sql = """
+        INSERT INTO relationship_history (user1_id, user2_id, closeness_score, timestamp)
+        VALUES (%s, %s, %s, NOW())
+    """
+    cursor.execute(sql, (user1_id, user2_id, closeness_score))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def get_relationship_history(user1_id, user2_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    sql = """
+        SELECT closeness_score, timestamp 
+        FROM relationship_history
+        WHERE (user1_id = %s AND user2_id = %s)
+           OR (user1_id = %s AND user2_id = %s)
+        ORDER BY timestamp ASC
+    """
+    cursor.execute(sql, (user1_id, user2_id, user2_id, user1_id))
+    history = cursor.fetchall()
+    
+    for row in history:
+        if row["timestamp"]:
+            row["timestamp"] = str(row["timestamp"])
+            
+    cursor.close()
+    conn.close()
+    return history
+
 
 def adjust_closeness(user1_id, user2_id, delta):
     relationship = get_relationship(user1_id, user2_id)
@@ -269,8 +311,13 @@ def adjust_closeness(user1_id, user2_id, delta):
             style = "neutral"
 
         update_relationship(user1_id, user2_id, style=style, closeness_score=new_score)
+        
+        # Sadece skor gerçekten değiştiyse geçmişi güncelle
+        if new_score != relationship["closeness_score"]:
+            insert_relationship_history(user1_id, user2_id, new_score)
     else:
         create_relationship(user1_id, user2_id, "neutral", 50)
+        insert_relationship_history(user1_id, user2_id, 50)
         adjust_closeness(user1_id, user2_id, delta)
 
 # Group Functions
