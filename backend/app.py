@@ -545,6 +545,49 @@ def remove_member(group_id, user_id):
     return jsonify({"success": True})
 
 # -------------------------------
+# PROFILE ENDPOINTS
+# -------------------------------
+
+@app.route("/profile/<int:user_id>", methods=["GET"])
+def get_profile(user_id):
+    profile = db_service.get_profile(user_id)
+    if not profile:
+        return jsonify({"error": "User not found"}), 404
+    return jsonify({"success": True, "profile": profile})
+
+
+@app.route("/profile/<int:user_id>", methods=["PATCH"])
+def update_profile(user_id):
+    data = request.get_json()
+    about = data.get("about")
+    if about is not None:
+        db_service.update_about(user_id, about)
+    return jsonify({"success": True, "message": "Profil güncellendi."})
+
+
+@app.route("/profile/<int:user_id>/picture", methods=["POST"])
+def upload_profile_picture(user_id):
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+
+    file = request.files['file']
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
+
+    filename = f"profile_{user_id}_{secure_filename(file.filename)}"
+    save_path = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(save_path)
+
+    picture_url = f"docs/{filename}"
+    db_service.update_profile_picture(user_id, picture_url)
+
+    return jsonify({
+        "success": True,
+        "profile_picture": picture_url,
+        "message": "Profil fotoğrafı güncellendi."
+    })
+
+# -------------------------------
 # SOCKET EVENTS (TEST)
 # -------------------------------
 
