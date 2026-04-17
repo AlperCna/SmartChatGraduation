@@ -380,3 +380,43 @@ def remove_group_member(group_id, user_id):
     conn.commit()
     cursor.close()
     conn.close()
+
+
+# -------------------------------------------------------------------
+# PROFILE FUNCTIONS
+# -------------------------------------------------------------------
+def get_profile(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        "SELECT user_id, username, email, profile_picture, about FROM users WHERE user_id = %s",
+        (user_id,)
+    )
+    user = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return user
+
+
+def update_about(user_id, about):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET about = %s WHERE user_id = %s",
+        (about, user_id)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def update_profile_picture(user_id, picture_path):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET profile_picture = %s WHERE user_id = %s",
+        (picture_path, user_id)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
