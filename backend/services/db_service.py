@@ -223,20 +223,20 @@ def get_relationship(user1_id, user2_id):
     return relationship
 
 
-def create_relationship(user1_id, user2_id, style="neutral", closeness_score=50):
+def create_relationship(user1_id, user2_id, style="neutral", closeness_score=50, politeness_score=50):
     conn = get_db_connection()
     cursor = conn.cursor()
     sql = """
-        INSERT INTO user_relationships (user1_id, user2_id, style, closeness_score)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO user_relationships (user1_id, user2_id, style, closeness_score, politeness_score)
+        VALUES (%s, %s, %s, %s, %s)
     """
-    cursor.execute(sql, (user1_id, user2_id, style, closeness_score))
+    cursor.execute(sql, (user1_id, user2_id, style, closeness_score, politeness_score))
     conn.commit()
     cursor.close()
     conn.close()
 
 
-def update_relationship(user1_id, user2_id, style=None, closeness_score=None):
+def update_relationship(user1_id, user2_id, style=None, closeness_score=None, politeness_score=None):
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -248,6 +248,9 @@ def update_relationship(user1_id, user2_id, style=None, closeness_score=None):
     if closeness_score is not None:
         fields.append("closeness_score = %s")
         values.append(closeness_score)
+    if politeness_score is not None:
+        fields.append("politeness_score = %s")
+        values.append(politeness_score)
 
     if not fields:
         return
@@ -298,27 +301,49 @@ def get_relationship_history(user1_id, user2_id):
     return history
 
 
-def adjust_closeness(user1_id, user2_id, delta):
+def update_relationship_metrics(user1_id, user2_id, sentiment="neutral"):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    # 1. Toplam karşılıklı mesaj sayısını bul
+    sql_count = """
+        SELECT COUNT(*) as total FROM messages 
+        WHERE (sender_id = %s AND receiver_id = %s) 
+           OR (sender_id = %s AND receiver_id = %s)
+    """
+    cursor.execute(sql_count, (user1_id, user2_id, user2_id, user1_id))
+    result = cursor.fetchone()
+    total_messages = result['total'] if result else 0
+    cursor.close()
+    conn.close()
+
+    # Samimiyet Puanı: Her 10 mesajda +1 puan artar (min 0, max 100)
+    new_closeness = min(100, total_messages // 10)
+
     relationship = get_relationship(user1_id, user2_id)
-    if relationship:
-        new_score = max(0, min(100, relationship["closeness_score"] + delta))
-
-        if new_score <= 30:
-            style = "formal"
-        elif new_score >= 71:
-            style = "informal"
-        else:
-            style = "neutral"
-
-        update_relationship(user1_id, user2_id, style=style, closeness_score=new_score)
+    
+    # Nezaket Puanı Güncellemesi:
+    current_politeness = relationship["politeness_score"] if relationship and "politeness_score" in relationship else 50
+    politeness_delta = 0
+    if sentiment == "positive":
+        politeness_delta = 5
+    elif sentiment == "negative":
+        politeness_delta = -5
         
-        # Sadece skor gerçekten değiştiyse geçmişi güncelle
-        if new_score != relationship["closeness_score"]:
-            insert_relationship_history(user1_id, user2_id, new_score)
+    new_politeness = max(0, min(100, current_politeness + politeness_delta))
+
+    if relationship:
+        # Eğer puanlar değiştiyse veritabanına kaydet
+        if new_closeness != relationship["closeness_score"] or new_politeness != relationship["politeness_score"]:
+            update_relationship(user1_id, user2_id, closeness_score=new_closeness, politeness_score=new_politeness)
+            
+            # Sadece closeness değiştiyse history ekle (Geçmiş uyumluluğu için tutuluyor)
+            if new_closeness != relationship["closeness_score"]:
+                insert_relationship_history(user1_id, user2_id, new_closeness)
     else:
-        create_relationship(user1_id, user2_id, "neutral", 50)
-        insert_relationship_history(user1_id, user2_id, 50)
-        adjust_closeness(user1_id, user2_id, delta)
+        # Yeni ilişki yarat
+        create_relationship(user1_id, user2_id, "neutral", closeness_score=new_closeness, politeness_score=new_politeness)
+        insert_relationship_history(user1_id, user2_id, new_closeness)
 
 # Group Functions
 def create_group(group_name, admin_id, member_ids, group_picture=None):
