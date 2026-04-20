@@ -85,15 +85,8 @@ def send_message():
 
     if not group_id:
         sentiment_res = predict_sentiment(content)
-        sentiment = sentiment_res.get("sentiment")
-        delta = 0
-        if sentiment == "positive":
-            delta = 5
-        elif sentiment == "negative":
-            delta = -5
-        
-        if delta != 0:
-            db_service.adjust_closeness(sender_id, receiver_id, delta)
+        sentiment = sentiment_res.get("sentiment", "neutral")
+        db_service.update_relationship_metrics(sender_id, receiver_id, sentiment)
 
     return jsonify({
         "message": "Mesaj başarıyla gönderildi.",
@@ -283,25 +276,36 @@ def complete_text():
         sentiment_confidence = sentiment_res["confidence"]
 
         # --------------------------------------------------
-        # 4️⃣ CLOSENESS SCORE GÜNCELLEME (SADECE BURADA)
+        # 4️⃣ NEZAKET VE SAMİMİYET GÜNCELLEME / MATRİS HESAPLAMA
         # --------------------------------------------------
-        delta = 0
-        if sentiment == "positive":
-            delta = 5
-        elif sentiment == "negative":
-            delta = -5
+        db_service.update_relationship_metrics(sender_id, receiver_id, sentiment)
 
-        if delta != 0:
-            db_service.adjust_closeness(sender_id, receiver_id, delta)
+        relationship = db_service.get_relationship(sender_id, receiver_id)
+        politeness = relationship.get("politeness_score", 50) if relationship else 50
+        closeness = relationship.get("closeness_score", 0) if relationship else 0
+
+        if politeness > 50 and closeness <= 50:
+            matrix_style = "Formal (Resmi)"
+        elif politeness > 50 and closeness > 50:
+            matrix_style = "Respectful-Close (Candan/Saygılı)"
+        elif politeness <= 50 and closeness > 50:
+            matrix_style = "Informal (Samimi/Kanka)"
+        else:
+            matrix_style = "Cold (Soğuk/Mesafeli)"
+
+        relationship_style = matrix_style
 
         # --------------------------------------------------
         # 5️⃣ GPT İLE MESAJ TAMAMLAMA / ÖNERİ
         # --------------------------------------------------
         prompt = f"""
 Görev:
+Kullanıcılar arasındaki Samimiyet: {closeness}, Nezaket: {politeness}
+İlişki Tarzı (Matris Sonucu): {matrix_style}
+
 Aşağıdaki konuşma geçmişini dikkate alarak,
 kullanıcının son mesajını yazım hataları düzeltilmiş,
-'{relationship_style}' üsluba uygun şekilde yeniden yaz.
+ve yukarıda belirtilen '{matrix_style}' ilişki tarzına (örneğin kankaysa daha argo, hocasıysa daha kibar ama yakın) uygun şekilde yeniden yaz.
 
 Konuşma Geçmişi:
 {history}
@@ -640,16 +644,9 @@ def handle_send_message(data):
         if not group_id:
             from ai_module.ml_model import predict_sentiment
             sentiment_res = predict_sentiment(content)
-            sentiment = sentiment_res.get("sentiment")
+            sentiment = sentiment_res.get("sentiment", "neutral")
             
-            delta = 0
-            if sentiment == "positive":
-                delta = 5
-            elif sentiment == "negative":
-                delta = -5
-                
-            if delta != 0:
-                db_service.adjust_closeness(sender_id, receiver_id, delta)
+            db_service.update_relationship_metrics(sender_id, receiver_id, sentiment)
         
         if group_id:
             # Emit to all users, client filters it
