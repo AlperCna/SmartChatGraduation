@@ -181,9 +181,11 @@ def get_relationship_history_route(user1_id, user2_id):
     history = db_service.get_relationship_history(user1_id, user2_id)
     relationship = db_service.get_relationship(user1_id, user2_id)
     current_score = relationship["closeness_score"] if relationship else 50
+    current_style = relationship.get("style", "Formal (Resmi)") if relationship else "Formal (Resmi)"
     return jsonify({
         "success": True,
         "current_score": current_score,
+        "current_style": current_style,
         "history": history
     })
 
@@ -283,16 +285,8 @@ def complete_text():
         relationship = db_service.get_relationship(sender_id, receiver_id)
         politeness = relationship.get("politeness_score", 50) if relationship else 50
         closeness = relationship.get("closeness_score", 0) if relationship else 0
-
-        if politeness > 50 and closeness <= 50:
-            matrix_style = "Formal (Resmi)"
-        elif politeness > 50 and closeness > 50:
-            matrix_style = "Respectful-Close (Candan/Saygılı)"
-        elif politeness <= 50 and closeness > 50:
-            matrix_style = "Informal (Samimi/Kanka)"
-        else:
-            matrix_style = "Cold (Soğuk/Mesafeli)"
-
+        matrix_style = relationship.get("style", "Formal (Resmi)") if relationship else "Formal (Resmi)"
+        
         relationship_style = matrix_style
 
         # --------------------------------------------------

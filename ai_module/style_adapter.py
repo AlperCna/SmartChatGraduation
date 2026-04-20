@@ -13,24 +13,17 @@ def detect_style(sender_id, receiver_id, last_message):
         relationship = db_service.get_relationship(sender_id, receiver_id)
 
         if not relationship:
-            # confidence YOK → closeness_score VAR
+            # Relationship yoksa yeni ilişki oluştur ama matriks yapısını bozmadan default at
             db_service.create_relationship(
                 sender_id,
                 receiver_id,
-                style=message_style,
-                closeness_score=50
+                style="Formal (Resmi)",
+                closeness_score=0,
+                politeness_score=50
             )
-            relationship_style = message_style
+            relationship_style = "Formal (Resmi)"
         else:
-            relationship_style = relationship["style"]
-
-            # soft update → update_relationship kullan
-            if message_style != relationship_style:
-                db_service.update_relationship(
-                    sender_id,
-                    receiver_id,
-                    style=message_style
-                )
+            relationship_style = relationship.get("style", "Formal (Resmi)")
 
         return {
             "message_style": message_style,

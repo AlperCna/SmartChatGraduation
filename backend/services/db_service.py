@@ -301,6 +301,17 @@ def get_relationship_history(user1_id, user2_id):
     return history
 
 
+def calculate_matrix_style(closeness, politeness):
+    if politeness > 50 and closeness <= 50:
+        return "Formal (Resmi)"
+    elif politeness > 50 and closeness > 50:
+        return "Respectful-Close (Candan/Saygılı)"
+    elif politeness <= 50 and closeness > 50:
+        return "Informal (Samimi/Kanka)"
+    else:
+        return "Cold (Soğuk/Mesafeli)"
+
+
 def update_relationship_metrics(user1_id, user2_id, sentiment="neutral"):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -331,18 +342,19 @@ def update_relationship_metrics(user1_id, user2_id, sentiment="neutral"):
         politeness_delta = -5
         
     new_politeness = max(0, min(100, current_politeness + politeness_delta))
+    new_style = calculate_matrix_style(new_closeness, new_politeness)
 
     if relationship:
         # Eğer puanlar değiştiyse veritabanına kaydet
-        if new_closeness != relationship["closeness_score"] or new_politeness != relationship["politeness_score"]:
-            update_relationship(user1_id, user2_id, closeness_score=new_closeness, politeness_score=new_politeness)
+        if new_closeness != relationship["closeness_score"] or new_politeness != relationship["politeness_score"] or new_style != relationship.get("style"):
+            update_relationship(user1_id, user2_id, style=new_style, closeness_score=new_closeness, politeness_score=new_politeness)
             
             # Sadece closeness değiştiyse history ekle (Geçmiş uyumluluğu için tutuluyor)
             if new_closeness != relationship["closeness_score"]:
                 insert_relationship_history(user1_id, user2_id, new_closeness)
     else:
         # Yeni ilişki yarat
-        create_relationship(user1_id, user2_id, "neutral", closeness_score=new_closeness, politeness_score=new_politeness)
+        create_relationship(user1_id, user2_id, style=new_style, closeness_score=new_closeness, politeness_score=new_politeness)
         insert_relationship_history(user1_id, user2_id, new_closeness)
 
 # Group Functions
