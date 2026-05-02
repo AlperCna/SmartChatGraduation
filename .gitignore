@@ -4,3 +4,11 @@ venv/
 __pycache__/
 *.pyc
 .env
+
+# BERT Models and Data (Large Files)
+smartchat_bert_model/
+smartchat_berturk_duygu/
+smartchat_style_bert/
+smartchat_style_model_v1/
+*.csv
+*.pkl.tmp

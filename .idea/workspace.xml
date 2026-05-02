@@ -4,7 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ab59f5fd-a08d-4929-9a12-ff64a48a414a" name="Changes" comment="" />
+    <list default="true" id="ab59f5fd-a08d-4929-9a12-ff64a48a414a" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -241,6 +243,9 @@
       <workItem from="1767175685529" duration="14620000" />
       <workItem from="1767259479169" duration="1263000" />
       <workItem from="1767514335100" duration="660000" />
+      <workItem from="1776672768963" duration="648000" />
+      <workItem from="1776682184044" duration="1686000" />
+      <workItem from="1776699475368" duration="1079000" />
     </task>
     <servers />
   </component>
@@ -269,7 +274,7 @@
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/SmartChatGraduation$punctuation_fixer.coverage" NAME="punctuation_fixer Coverage Results" MODIFIED="1764007710255" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/ai_module" />
-    <SUITE FILE_PATH="coverage/SmartChatGraduation$app.coverage" NAME="app Coverage Results" MODIFIED="1775723089890" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/backend" />
+    <SUITE FILE_PATH="coverage/SmartChatGraduation$app.coverage" NAME="app Coverage Results" MODIFIED="1776700898268" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/backend" />
     <SUITE FILE_PATH="coverage/SmartChatGraduation$styledataset.coverage" NAME="styledataset Coverage Results" MODIFIED="1764664144895" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SmartChatGraduation$test.coverage" NAME="test Coverage Results" MODIFIED="1765268175877" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SmartChat$script_clean_style_dataset.coverage" NAME="script_clean_style_dataset Coverage Results" MODIFIED="1765224548216" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
