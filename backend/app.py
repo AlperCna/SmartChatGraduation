@@ -21,10 +21,54 @@ import threading
 from datetime import datetime
 
 
-load_dotenv()
+load_dotenv(override=True)
 print("API Key test:", os.getenv("OPENAI_API_KEY")[:6], "...")  # sadece ilk 6 karakter
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def _build_style_instructions(closeness: int, politeness: int) -> str:
+    rules = []
+    if closeness >= 75:
+        rules += [
+            "- Hitap: 'sen' kullan, 'siz' KULLANMA",
+            "- 'ya', 'kanka', 'abi/abla', 'be' gibi samimi ekler kullanabilirsin",
+            "- Cümleler kısa ve doğal olsun, gereksiz resmiyet ekleme",
+        ]
+    elif closeness >= 40:
+        rules += [
+            "- Hitap: 'sen' kullan",
+            "- Samimi ama saygılı bir ton",
+            "- Argo kelimeler kullanma",
+        ]
+    else:
+        rules += [
+            "- Hitap: 'siz' kullan",
+            "- Resmi ve mesafeli bir dil kullan",
+            "- Kısa ve öz ol",
+        ]
+
+    if politeness >= 75:
+        rules += [
+            "- Kibar ifadeler kullan, teşekkür veya nezaket vurgusunu koru",
+            "- Sert veya doğrudan eleştiri içeren ifadeler KULLANMA",
+        ]
+    elif politeness <= 30:
+        rules += [
+            "- Gereksiz nezaket kalıpları (teşekkürler, rica ederim vb.) EKLEME",
+            "- Doğrudan ve sade bir dil kullan",
+        ]
+
+    return "\n".join(rules)
+
+
+def _build_style_example(closeness: int) -> str:
+    if closeness >= 75:
+        return '"toplantıya katılabilir misiniz?" → "ya toplantıda mısın"'
+    elif closeness >= 40:
+        return '"ne zaman gelcen" → "Ne zaman gelebilirsin?"'
+    else:
+        return '"yarın görüşelim" → "Yarın görüşebilir miyiz?"'
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 CORS(app)
@@ -292,28 +336,28 @@ def complete_text():
         # --------------------------------------------------
         # 5️⃣ GPT İLE MESAJ TAMAMLAMA / ÖNERİ
         # --------------------------------------------------
-        prompt = f"""
-Görev:
-Kullanıcılar arasındaki Samimiyet: {closeness}, Nezaket: {politeness}
-İlişki Tarzı (Matris Sonucu): {matrix_style}
+        style_instructions = _build_style_instructions(closeness, politeness)
+        example = _build_style_example(closeness)
 
-Aşağıdaki konuşma geçmişini dikkate alarak,
-kullanıcının son mesajını yazım hataları düzeltilmiş,
-ve yukarıda belirtilen '{matrix_style}' ilişki tarzına (örneğin kankaysa daha argo, hocasıysa daha kibar ama yakın) uygun şekilde yeniden yaz.
+        prompt = f"""Sen bir Türkçe mesaj asistanısın. Kullanıcının mesajını aşağıdaki KURALLARA kesinlikle uyarak yeniden yaz.
+
+KURALLAR (bunları ihlal etme):
+{style_instructions}
+
+ÖRNEK ({matrix_style} için):
+{example}
 
 Konuşma Geçmişi:
 {history}
 
-Kullanıcının Mesajı:
-{text}
+Kullanıcının Mesajı: {text}
 
-Sadece önerilen cümleyi döndür.
-"""
+Sadece yeniden yazılmış cümleyi döndür. Açıklama ekleme."""
 
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
+            temperature=0.3,
             max_tokens=60
         )
 
