@@ -4,7 +4,7 @@ import os
 
 from mysql.connector import pooling
 
-load_dotenv()  # ..env dosyasını yükle
+load_dotenv(override=True)
 
 db_pool = None
 
