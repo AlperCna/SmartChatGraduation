@@ -1,12 +1,16 @@
 import mysql.connector
 from dotenv import load_dotenv
 import os
-
+import logging
+from contextlib import contextmanager
 from mysql.connector import pooling
 
 load_dotenv(override=True)
 
+logger = logging.getLogger(__name__)
+
 db_pool = None
+
 
 def get_db_connection():
     global db_pool
@@ -24,224 +28,224 @@ def get_db_connection():
     return db_pool.get_connection()
 
 
+@contextmanager
+def _db_cursor(dictionary=False):
+    """
+    Context manager: bağlantı ve cursor'ı otomatik açar/kapatır.
+    Hata olursa rollback yapar, her durumda connection pool'a geri verir.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=dictionary)
+        yield conn, cursor
+    except mysql.connector.Error as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        logger.error(f"DB Error: {e}")
+        raise
+    finally:
+        if cursor:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# -------------------------------------------------------------------
+# USER FUNCTIONS
+# -------------------------------------------------------------------
+
 def insert_user(username, email, password_hash):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    sql = "INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)"
-    cursor.execute(sql, (username, email, password_hash))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    with _db_cursor() as (conn, cursor):
+        sql = "INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)"
+        cursor.execute(sql, (username, email, password_hash))
+        conn.commit()
 
 
 def get_users():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM users")
-    users = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return users
-
-
-def insert_message(sender_id, receiver_id, content, group_id=None):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    if group_id:
-        sql = "INSERT INTO messages (sender_id, receiver_id, content, group_id) VALUES (%s, %s, %s, %s)"
-        cursor.execute(sql, (sender_id, None, content, group_id))
-    else:
-        sql = "INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)"
-        cursor.execute(sql, (sender_id, receiver_id, content))
-    message_id = cursor.lastrowid
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return message_id
-
-
-def get_messages(sender_id, receiver_id=None, group_id=None):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    if group_id:
-        sql = """
-            SELECT m.*, media.file_path, media.media_type, u.username as sender_username
-            FROM messages m
-            LEFT JOIN media ON m.message_id = media.message_id
-            JOIN users u ON m.sender_id = u.user_id
-            WHERE m.group_id = %s
-            ORDER BY m.timestamp ASC
-        """
-        cursor.execute(sql, (group_id,))
-    else:
-        sql = """
-            SELECT m.*, media.file_path, media.media_type, u.username as sender_username
-            FROM messages m
-            LEFT JOIN media ON m.message_id = media.message_id
-            JOIN users u ON m.sender_id = u.user_id
-            WHERE (m.sender_id = %s AND m.receiver_id = %s AND m.group_id IS NULL)
-               OR (m.sender_id = %s AND m.receiver_id = %s AND m.group_id IS NULL)
-            ORDER BY m.timestamp ASC
-        """
-        cursor.execute(sql, (sender_id, receiver_id, receiver_id, sender_id))
-    messages = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return messages
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        cursor.execute("SELECT * FROM users")
+        return cursor.fetchall()
 
 
 def get_user_by_email(email):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
-    user = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return user
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
+        return cursor.fetchone()
 
 
 def get_user_by_username(username):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
-    user = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return user
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+        return cursor.fetchone()
 
 
 def get_user_by_id(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
-    user = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return user
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+        return cursor.fetchone()
+
+
+# -------------------------------------------------------------------
+# MESSAGE FUNCTIONS
+# -------------------------------------------------------------------
+
+def insert_message(sender_id, receiver_id, content, group_id=None):
+    with _db_cursor() as (conn, cursor):
+        if group_id:
+            sql = "INSERT INTO messages (sender_id, receiver_id, content, group_id) VALUES (%s, %s, %s, %s)"
+            cursor.execute(sql, (sender_id, None, content, group_id))
+        else:
+            sql = "INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)"
+            cursor.execute(sql, (sender_id, receiver_id, content))
+        message_id = cursor.lastrowid
+        conn.commit()
+        return message_id
+
+
+def get_messages(sender_id, receiver_id=None, group_id=None):
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        if group_id:
+            sql = """
+                SELECT m.*, media.file_path, media.media_type, u.username as sender_username
+                FROM messages m
+                LEFT JOIN media ON m.message_id = media.message_id
+                JOIN users u ON m.sender_id = u.user_id
+                WHERE m.group_id = %s
+                ORDER BY m.timestamp ASC
+            """
+            cursor.execute(sql, (group_id,))
+        else:
+            sql = """
+                SELECT m.*, media.file_path, media.media_type, u.username as sender_username
+                FROM messages m
+                LEFT JOIN media ON m.message_id = media.message_id
+                JOIN users u ON m.sender_id = u.user_id
+                WHERE (m.sender_id = %s AND m.receiver_id = %s AND m.group_id IS NULL)
+                   OR (m.sender_id = %s AND m.receiver_id = %s AND m.group_id IS NULL)
+                ORDER BY m.timestamp ASC
+            """
+            cursor.execute(sql, (sender_id, receiver_id, receiver_id, sender_id))
+        return cursor.fetchall()
 
 
 def get_chat_partners(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    # Daha gelişmiş sorgu: Son mesajı ve zamanını da getirir, grup ve normal sohbetleri birleştirir
-    sql = """
-        SELECT u.user_id, u.username,
-               (SELECT content FROM messages
-                WHERE ((sender_id = %s AND receiver_id = u.user_id)
-                   OR (sender_id = u.user_id AND receiver_id = %s))
-                   AND group_id IS NULL
-                ORDER BY timestamp DESC LIMIT 1) as last_message,
-               (SELECT timestamp FROM messages
-                WHERE ((sender_id = %s AND receiver_id = u.user_id)
-                   OR (sender_id = u.user_id AND receiver_id = %s))
-                   AND group_id IS NULL
-                ORDER BY timestamp DESC LIMIT 1) as last_time,
-               0 as is_group
-        FROM users u
-        WHERE u.user_id IN (
-            SELECT DISTINCT CASE WHEN sender_id = %s THEN receiver_id ELSE sender_id END
-            FROM messages
-            WHERE (sender_id = %s OR receiver_id = %s) AND group_id IS NULL
-        )
-        UNION
-        SELECT g.group_id as user_id, g.group_name as username,
-               (SELECT content FROM messages
-                WHERE messages.group_id = g.group_id
-                ORDER BY timestamp DESC LIMIT 1) as last_message,
-               (SELECT timestamp FROM messages
-                WHERE messages.group_id = g.group_id
-                ORDER BY timestamp DESC LIMIT 1) as last_time,
-               1 as is_group
-        FROM `groups` g
-        JOIN group_members gm ON g.group_id = gm.group_id
-        WHERE gm.user_id = %s
-        ORDER BY last_time DESC
-    """
-    cursor.execute(sql, (user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id))
-    result = cursor.fetchall()
-    
-    # Zaman formatını UI için düzenle (isteğe bağlı)
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        sql = """
+            SELECT u.user_id, u.username,
+                   (SELECT content FROM messages
+                    WHERE ((sender_id = %s AND receiver_id = u.user_id)
+                       OR (sender_id = u.user_id AND receiver_id = %s))
+                       AND group_id IS NULL
+                    ORDER BY timestamp DESC LIMIT 1) as last_message,
+                   (SELECT timestamp FROM messages
+                    WHERE ((sender_id = %s AND receiver_id = u.user_id)
+                       OR (sender_id = u.user_id AND receiver_id = %s))
+                       AND group_id IS NULL
+                    ORDER BY timestamp DESC LIMIT 1) as last_time,
+                   0 as is_group
+            FROM users u
+            WHERE u.user_id IN (
+                SELECT DISTINCT CASE WHEN sender_id = %s THEN receiver_id ELSE sender_id END
+                FROM messages
+                WHERE (sender_id = %s OR receiver_id = %s) AND group_id IS NULL
+            )
+            UNION
+            SELECT g.group_id as user_id, g.group_name as username,
+                   (SELECT content FROM messages
+                    WHERE messages.group_id = g.group_id
+                    ORDER BY timestamp DESC LIMIT 1) as last_message,
+                   (SELECT timestamp FROM messages
+                    WHERE messages.group_id = g.group_id
+                    ORDER BY timestamp DESC LIMIT 1) as last_time,
+                   1 as is_group
+            FROM `groups` g
+            JOIN group_members gm ON g.group_id = gm.group_id
+            WHERE gm.user_id = %s
+            ORDER BY last_time DESC
+        """
+        cursor.execute(sql, (user_id,) * 8)
+        result = cursor.fetchall()
+
     for row in result:
-        if row["last_time"]:
+        if row.get("last_time"):
             row["last_time"] = str(row["last_time"])
-            
-    cursor.close()
-    conn.close()
     return result
 
 
-def insert_media(message_id, media_type, file_path):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    sql = """
-        INSERT INTO media (message_id, media_type, file_path, uploaded_at)
-        VALUES (%s, %s, %s, NOW())
-    """
-    cursor.execute(sql, (message_id, media_type, file_path))
-    conn.commit()
-    cursor.close()
-    conn.close()
+# -------------------------------------------------------------------
+# MEDIA
+# -------------------------------------------------------------------
 
+def insert_media(message_id, media_type, file_path):
+    with _db_cursor() as (conn, cursor):
+        sql = """
+            INSERT INTO media (message_id, media_type, file_path, uploaded_at)
+            VALUES (%s, %s, %s, NOW())
+        """
+        cursor.execute(sql, (message_id, media_type, file_path))
+        conn.commit()
+
+
+# -------------------------------------------------------------------
+# SUGGESTIONS
+# -------------------------------------------------------------------
 
 def insert_suggestion(user_id, original_text, suggested_text, style):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    sql = """
-        INSERT INTO suggestions (user_id, original_text, suggested_text, style, accepted, timestamp)
-        VALUES (%s, %s, %s, %s, NULL, NOW())
-    """
-    cursor.execute(sql, (user_id, original_text, suggested_text, style))
-    conn.commit()
-    suggestion_id = cursor.lastrowid
-    cursor.close()
-    conn.close()
-    return suggestion_id
+    with _db_cursor() as (conn, cursor):
+        sql = """
+            INSERT INTO suggestions (user_id, original_text, suggested_text, style, accepted, timestamp)
+            VALUES (%s, %s, %s, %s, NULL, NOW())
+        """
+        cursor.execute(sql, (user_id, original_text, suggested_text, style))
+        conn.commit()
+        return cursor.lastrowid
 
 
 def update_suggestion_acceptance(suggestion_id, accepted):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    sql = "UPDATE suggestions SET accepted = %s WHERE suggestion_id = %s"
-    cursor.execute(sql, (int(accepted), suggestion_id))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    with _db_cursor() as (conn, cursor):
+        sql = "UPDATE suggestions SET accepted = %s WHERE suggestion_id = %s"
+        cursor.execute(sql, (int(accepted), suggestion_id))
+        conn.commit()
 
+
+# -------------------------------------------------------------------
+# RELATIONSHIP FUNCTIONS
+# -------------------------------------------------------------------
 
 def get_relationship(user1_id, user2_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    sql = """
-        SELECT * FROM user_relationships
-        WHERE (user1_id = %s AND user2_id = %s)
-           OR (user1_id = %s AND user2_id = %s)
-    """
-    cursor.execute(sql, (user1_id, user2_id, user2_id, user1_id))
-    relationship = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return relationship
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        sql = """
+            SELECT * FROM user_relationships
+            WHERE (user1_id = %s AND user2_id = %s)
+               OR (user1_id = %s AND user2_id = %s)
+        """
+        cursor.execute(sql, (user1_id, user2_id, user2_id, user1_id))
+        return cursor.fetchone()
 
 
 def create_relationship(user1_id, user2_id, style="neutral", closeness_score=50, politeness_score=50):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    sql = """
-        INSERT INTO user_relationships (user1_id, user2_id, style, closeness_score, politeness_score)
-        VALUES (%s, %s, %s, %s, %s)
-    """
-    cursor.execute(sql, (user1_id, user2_id, style, closeness_score, politeness_score))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    with _db_cursor() as (conn, cursor):
+        sql = """
+            INSERT INTO user_relationships (user1_id, user2_id, style, closeness_score, politeness_score)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(sql, (user1_id, user2_id, style, closeness_score, politeness_score))
+        conn.commit()
 
 
 def update_relationship(user1_id, user2_id, style=None, closeness_score=None, politeness_score=None):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    fields = []
-    values = []
+    fields, values = [], []
     if style is not None:
         fields.append("style = %s")
         values.append(style)
@@ -255,49 +259,43 @@ def update_relationship(user1_id, user2_id, style=None, closeness_score=None, po
     if not fields:
         return
 
-    sql = f"""
-        UPDATE user_relationships
-        SET {', '.join(fields)}
-        WHERE (user1_id = %s AND user2_id = %s)
-           OR (user1_id = %s AND user2_id = %s)
-    """
-    values.extend([user1_id, user2_id, user2_id, user1_id])
-    cursor.execute(sql, tuple(values))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    with _db_cursor() as (conn, cursor):
+        sql = f"""
+            UPDATE user_relationships
+            SET {', '.join(fields)}
+            WHERE (user1_id = %s AND user2_id = %s)
+               OR (user1_id = %s AND user2_id = %s)
+        """
+        values.extend([user1_id, user2_id, user2_id, user1_id])
+        cursor.execute(sql, tuple(values))
+        conn.commit()
+
 
 def insert_relationship_history(user1_id, user2_id, closeness_score):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    sql = """
-        INSERT INTO relationship_history (user1_id, user2_id, closeness_score, timestamp)
-        VALUES (%s, %s, %s, NOW())
-    """
-    cursor.execute(sql, (user1_id, user2_id, closeness_score))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    with _db_cursor() as (conn, cursor):
+        sql = """
+            INSERT INTO relationship_history (user1_id, user2_id, closeness_score, timestamp)
+            VALUES (%s, %s, %s, NOW())
+        """
+        cursor.execute(sql, (user1_id, user2_id, closeness_score))
+        conn.commit()
+
 
 def get_relationship_history(user1_id, user2_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    sql = """
-        SELECT closeness_score, timestamp 
-        FROM relationship_history
-        WHERE (user1_id = %s AND user2_id = %s)
-           OR (user1_id = %s AND user2_id = %s)
-        ORDER BY timestamp ASC
-    """
-    cursor.execute(sql, (user1_id, user2_id, user2_id, user1_id))
-    history = cursor.fetchall()
-    
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        sql = """
+            SELECT closeness_score, timestamp
+            FROM relationship_history
+            WHERE (user1_id = %s AND user2_id = %s)
+               OR (user1_id = %s AND user2_id = %s)
+            ORDER BY timestamp ASC
+        """
+        cursor.execute(sql, (user1_id, user2_id, user2_id, user1_id))
+        history = cursor.fetchall()
+
     for row in history:
-        if row["timestamp"]:
+        if row.get("timestamp"):
             row["timestamp"] = str(row["timestamp"])
-            
-    cursor.close()
-    conn.close()
     return history
 
 
@@ -313,147 +311,137 @@ def calculate_matrix_style(closeness, politeness):
 
 
 def update_relationship_metrics(user1_id, user2_id, sentiment="neutral"):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    
-    # 1. Toplam karşılıklı mesaj sayısını bul
-    sql_count = """
-        SELECT COUNT(*) as total FROM messages 
-        WHERE (sender_id = %s AND receiver_id = %s) 
-           OR (sender_id = %s AND receiver_id = %s)
-    """
-    cursor.execute(sql_count, (user1_id, user2_id, user2_id, user1_id))
-    result = cursor.fetchone()
-    total_messages = result['total'] if result else 0
-    cursor.close()
-    conn.close()
+    try:
+        with _db_cursor(dictionary=True) as (conn, cursor):
+            sql_count = """
+                SELECT COUNT(*) as total FROM messages
+                WHERE (sender_id = %s AND receiver_id = %s)
+                   OR (sender_id = %s AND receiver_id = %s)
+            """
+            cursor.execute(sql_count, (user1_id, user2_id, user2_id, user1_id))
+            result = cursor.fetchone()
+            total_messages = result['total'] if result else 0
 
-    # Samimiyet Puanı: Her 10 mesajda +1 puan artar (min 0, max 100)
-    new_closeness = min(100, total_messages // 10)
+        new_closeness = min(100, total_messages // 10)
+        relationship = get_relationship(user1_id, user2_id)
 
-    relationship = get_relationship(user1_id, user2_id)
-    
-    # Nezaket Puanı Güncellemesi:
-    current_politeness = relationship["politeness_score"] if relationship and "politeness_score" in relationship else 50
-    politeness_delta = 0
-    if sentiment == "positive":
-        politeness_delta = 5
-    elif sentiment == "negative":
-        politeness_delta = -5
-        
-    new_politeness = max(0, min(100, current_politeness + politeness_delta))
-    new_style = calculate_matrix_style(new_closeness, new_politeness)
+        current_politeness = (
+            relationship["politeness_score"]
+            if relationship and "politeness_score" in relationship
+            else 50
+        )
+        politeness_delta = 5 if sentiment == "positive" else (-5 if sentiment == "negative" else 0)
+        new_politeness = max(0, min(100, current_politeness + politeness_delta))
+        new_style = calculate_matrix_style(new_closeness, new_politeness)
 
-    if relationship:
-        # Eğer puanlar değiştiyse veritabanına kaydet
-        if new_closeness != relationship["closeness_score"] or new_politeness != relationship["politeness_score"] or new_style != relationship.get("style"):
-            update_relationship(user1_id, user2_id, style=new_style, closeness_score=new_closeness, politeness_score=new_politeness)
-            
-            # Sadece closeness değiştiyse history ekle (Geçmiş uyumluluğu için tutuluyor)
-            if new_closeness != relationship["closeness_score"]:
-                insert_relationship_history(user1_id, user2_id, new_closeness)
-    else:
-        # Yeni ilişki yarat
-        create_relationship(user1_id, user2_id, style=new_style, closeness_score=new_closeness, politeness_score=new_politeness)
-        insert_relationship_history(user1_id, user2_id, new_closeness)
+        if relationship:
+            if (new_closeness != relationship["closeness_score"]
+                    or new_politeness != relationship["politeness_score"]
+                    or new_style != relationship.get("style")):
+                update_relationship(user1_id, user2_id,
+                                    style=new_style,
+                                    closeness_score=new_closeness,
+                                    politeness_score=new_politeness)
+                if new_closeness != relationship["closeness_score"]:
+                    insert_relationship_history(user1_id, user2_id, new_closeness)
+        else:
+            create_relationship(user1_id, user2_id,
+                                style=new_style,
+                                closeness_score=new_closeness,
+                                politeness_score=new_politeness)
+            insert_relationship_history(user1_id, user2_id, new_closeness)
 
-# Group Functions
+    except Exception as e:
+        # Metrik güncelleme kritik değil — mesaj gönderimini engelleme
+        logger.warning(f"update_relationship_metrics failed (non-critical): {e}")
+
+
+# -------------------------------------------------------------------
+# GROUP FUNCTIONS
+# -------------------------------------------------------------------
+
 def create_group(group_name, admin_id, member_ids, group_picture=None):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    sql = "INSERT INTO `groups` (group_name, group_picture, admin_id) VALUES (%s, %s, %s)"
-    cursor.execute(sql, (group_name, group_picture, admin_id))
-    group_id = cursor.lastrowid
-    
-    # Add members including admin
-    members = set(member_ids)
-    members.add(admin_id)
-    
-    member_sql = "INSERT INTO group_members (group_id, user_id) VALUES (%s, %s)"
-    cursor.executemany(member_sql, [(group_id, m) for m in members])
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return group_id
+    with _db_cursor() as (conn, cursor):
+        sql = "INSERT INTO `groups` (group_name, group_picture, admin_id) VALUES (%s, %s, %s)"
+        cursor.execute(sql, (group_name, group_picture, admin_id))
+        group_id = cursor.lastrowid
+
+        members = set(member_ids)
+        members.add(admin_id)
+        member_sql = "INSERT INTO group_members (group_id, user_id) VALUES (%s, %s)"
+        cursor.executemany(member_sql, [(group_id, m) for m in members])
+        conn.commit()
+        return group_id
+
 
 def get_group(group_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM `groups` WHERE group_id = %s", (group_id,))
-    group = cursor.fetchone()
-    
-    if group:
-        cursor.execute("SELECT u.user_id, u.username FROM users u JOIN group_members gm ON u.user_id = gm.user_id WHERE gm.group_id = %s", (group_id,))
-        group['members'] = cursor.fetchall()
-        
-    cursor.close()
-    conn.close()
-    return group
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        cursor.execute("SELECT * FROM `groups` WHERE group_id = %s", (group_id,))
+        group = cursor.fetchone()
+        if group:
+            cursor.execute(
+                "SELECT u.user_id, u.username FROM users u "
+                "JOIN group_members gm ON u.user_id = gm.user_id WHERE gm.group_id = %s",
+                (group_id,)
+            )
+            group['members'] = cursor.fetchall()
+        return group
+
 
 def update_group(group_id, group_name=None, group_picture=None):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    fields = []
-    values = []
+    fields, values = [], []
     if group_name is not None:
         fields.append("group_name = %s")
         values.append(group_name)
     if group_picture is not None:
         fields.append("group_picture = %s")
         values.append(group_picture)
-        
-    if fields:
+
+    if not fields:
+        return
+
+    with _db_cursor() as (conn, cursor):
         sql = f"UPDATE `groups` SET {', '.join(fields)} WHERE group_id = %s"
         values.append(group_id)
         cursor.execute(sql, tuple(values))
         conn.commit()
-    cursor.close()
-    conn.close()
+
 
 def remove_group_member(group_id, user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user_id))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    with _db_cursor() as (conn, cursor):
+        cursor.execute(
+            "DELETE FROM group_members WHERE group_id = %s AND user_id = %s",
+            (group_id, user_id)
+        )
+        conn.commit()
 
 
 # -------------------------------------------------------------------
 # PROFILE FUNCTIONS
 # -------------------------------------------------------------------
+
 def get_profile(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT user_id, username, email, profile_picture, about FROM users WHERE user_id = %s",
-        (user_id,)
-    )
-    user = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return user
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        cursor.execute(
+            "SELECT user_id, username, email, profile_picture, about FROM users WHERE user_id = %s",
+            (user_id,)
+        )
+        return cursor.fetchone()
 
 
 def update_about(user_id, about):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE users SET about = %s WHERE user_id = %s",
-        (about, user_id)
-    )
-    conn.commit()
-    cursor.close()
-    conn.close()
+    with _db_cursor() as (conn, cursor):
+        cursor.execute(
+            "UPDATE users SET about = %s WHERE user_id = %s",
+            (about, user_id)
+        )
+        conn.commit()
 
 
 def update_profile_picture(user_id, picture_path):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE users SET profile_picture = %s WHERE user_id = %s",
-        (picture_path, user_id)
-    )
-    conn.commit()
-    cursor.close()
-    conn.close()
+    with _db_cursor() as (conn, cursor):
+        cursor.execute(
+            "UPDATE users SET profile_picture = %s WHERE user_id = %s",
+            (picture_path, user_id)
+        )
+        conn.commit()
