@@ -139,6 +139,21 @@ def get_messages(sender_id, receiver_id=None, group_id=None):
         return cursor.fetchall()
 
 
+def get_recent_messages_from_user(sender_id, receiver_id, limit=5):
+    """Belirli bir göndericiden, belirli bir alıcıya gönderilen son N mesajı getirir."""
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        sql = """
+            SELECT content, timestamp
+            FROM messages
+            WHERE sender_id = %s AND receiver_id = %s AND group_id IS NULL
+              AND content IS NOT NULL AND content != ''
+            ORDER BY timestamp DESC
+            LIMIT %s
+        """
+        cursor.execute(sql, (sender_id, receiver_id, limit))
+        return cursor.fetchall()
+
+
 def get_chat_partners(user_id):
     with _db_cursor(dictionary=True) as (conn, cursor):
         sql = """
@@ -322,7 +337,9 @@ def update_relationship_metrics(user1_id, user2_id, sentiment="neutral"):
             result = cursor.fetchone()
             total_messages = result['total'] if result else 0
 
-        new_closeness = min(100, total_messages // 10)
+        # TEST AMAÇLI: Hızlı test edebilmek için her mesaj başına yakınlığı 5 puan artırıyoruz.
+        # Normalde bu değer 'total_messages // 10' veya benzeri yavaş bir orandı.
+        new_closeness = min(100, total_messages * 5)
         relationship = get_relationship(user1_id, user2_id)
 
         current_politeness = (
