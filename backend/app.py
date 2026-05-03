@@ -175,9 +175,13 @@ def signup():
 def login():
     try:
         data = request.get_json()
-        email = data.get("email", "").strip()
+        identifier = data.get("email", "").strip()
         password = data.get("password", "")
-        user = db_service.get_user_by_email(email)
+        
+        user = db_service.get_user_by_email(identifier)
+        if not user:
+            user = db_service.get_user_by_username(identifier)
+            
         if not user:
             return jsonify({"success": False, "error": "User not found"}), 401
         stored_pw = user["password_hash"]
@@ -232,6 +236,45 @@ def get_relationship_history_route(user1_id, user2_id):
         "current_style": current_style,
         "history": history
     })
+
+@app.route("/mood_forecast/<int:sender_id>/<int:receiver_id>", methods=["GET"])
+def get_mood_forecast(sender_id, receiver_id):
+    """
+    Kullanıcının konuştuğu kişinin (receiver_id) son mesajlarına bakarak ruh halini tahmin eder.
+    """
+    recent_messages = db_service.get_recent_messages_from_user(receiver_id, sender_id, limit=3)
+    
+    if not recent_messages:
+        return jsonify({"mood": "neutral", "warning": ""})
+        
+    neg_count = 0
+    pos_count = 0
+    
+    for msg in recent_messages:
+        text = msg.get("content", "")
+        if text:
+            # analyzer.polarity_scores yerine Türkçe için predict_sentiment kullanıyoruz
+            res = predict_sentiment(text)
+            sent = res.get("sentiment", "notr").lower()
+            
+            if sent == "negative":
+                neg_count += 1
+            elif sent == "positive":
+                pos_count += 1
+                
+    # Hassas test için 1 tane bile negatif varsa uyar:
+    if neg_count >= 1:
+        return jsonify({
+            "mood": "negative", 
+            "warning": "Bugün biraz gergin görünüyor, daha dikkatli yazmak ister misin?"
+        })
+    elif pos_count >= 1:
+        return jsonify({
+            "mood": "positive", 
+            "warning": "Bugün harika bir ruh halinde! Sohbetin tadını çıkar."
+        })
+    else:
+        return jsonify({"mood": "neutral", "warning": ""})
 
 # 📤 Yeni: Fotoğraf/ses/video medya dosyası yükleme
 @app.route("/upload_media", methods=["POST"])
