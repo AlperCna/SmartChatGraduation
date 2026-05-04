@@ -5,7 +5,7 @@ services:
     build: .
     container_name: smartchat_backend
     ports:
-      - "5000:5000"
+      - "9000:9000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DB_HOST=${DB_HOST}
@@ -13,6 +13,12 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
       - DB_PORT=${DB_PORT}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET}
+      - MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI}
     volumes:
       - ./docs:/app/docs  # Keep uploaded media persistent
     restart: always

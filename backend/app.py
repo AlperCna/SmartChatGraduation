@@ -3,11 +3,14 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, redirect
 from backend.services import db_service
 from flask_cors import CORS
 import bcrypt
 import os
+import secrets
+import urllib.parse
+import requests
 from werkzeug.utils import secure_filename
 from ai_module.punctuation_fixer import suggest_punctuation
 from ai_module.style_adapter import detect_style, adapt_style
@@ -23,6 +26,17 @@ from datetime import datetime
 
 load_dotenv(override=True)
 print("API Key test:", os.getenv("OPENAI_API_KEY")[:6], "...")  # sadece ilk 6 karakter
+
+# ── SSO CONFIG ──────────────────────────────────────────────────────
+GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI  = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:9000/auth/google/callback")
+
+MICROSOFT_CLIENT_ID     = os.getenv("MICROSOFT_CLIENT_ID")
+MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET")
+MICROSOFT_REDIRECT_URI  = os.getenv("MICROSOFT_REDIRECT_URI", "http://localhost:9000/auth/microsoft/callback")
+
+_oauth_states: set = set()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -184,8 +198,13 @@ def login():
             
         if not user:
             return jsonify({"success": False, "error": "User not found"}), 401
-        stored_pw = user["password_hash"]
-        if not stored_pw or not stored_pw.startswith("$2"):
+        stored_pw = user.get("password_hash")
+        if not stored_pw:
+            sso = user.get("sso_provider")
+            if sso:
+                return jsonify({"success": False, "error": f"Bu hesap {sso.capitalize()} ile kayıtlıdır. Lütfen SSO ile giriş yapınız."}), 401
+            return jsonify({"success": False, "error": "Invalid password hash format"}), 500
+        if not stored_pw.startswith("$2"):
             return jsonify({"success": False, "error": "Invalid password hash format"}), 500
         if not bcrypt.checkpw(password.encode("utf-8"), stored_pw.encode("utf-8")):
             return jsonify({"success": False, "error": "Invalid password"}), 401
@@ -630,6 +649,160 @@ def remove_member(group_id, user_id):
     return jsonify({"success": True})
 
 # -------------------------------
+# SSO HELPER
+# -------------------------------
+
+def _generate_sso_username(name: str, email: str) -> str:
+    base = ''.join(c for c in name.replace(' ', '').lower() if c.isalnum())[:15]
+    if not base:
+        base = email.split('@')[0][:15]
+    username = base
+    counter = 1
+    while db_service.get_user_by_username(username):
+        username = f"{base}{counter}"
+        counter += 1
+    return username
+
+
+# -------------------------------
+# SSO ENDPOINTS
+# -------------------------------
+
+@app.route('/auth/google')
+def auth_google():
+    state = secrets.token_urlsafe(16)
+    _oauth_states.add(state)
+    params = {
+        'client_id': GOOGLE_CLIENT_ID,
+        'redirect_uri': GOOGLE_REDIRECT_URI,
+        'response_type': 'code',
+        'scope': 'openid email profile',
+        'state': state,
+        'access_type': 'offline',
+    }
+    return redirect('https://accounts.google.com/o/oauth2/v2/auth?' + urllib.parse.urlencode(params))
+
+
+@app.route('/auth/google/callback')
+def auth_google_callback():
+    code  = request.args.get('code')
+    state = request.args.get('state')
+
+    if not state or state not in _oauth_states:
+        return redirect('smartchat://auth/callback?error=invalid_state')
+    _oauth_states.discard(state)
+
+    if not code:
+        return redirect('smartchat://auth/callback?error=no_code')
+
+    try:
+        token_resp = requests.post('https://oauth2.googleapis.com/token', data={
+            'code': code,
+            'client_id': GOOGLE_CLIENT_ID,
+            'client_secret': GOOGLE_CLIENT_SECRET,
+            'redirect_uri': GOOGLE_REDIRECT_URI,
+            'grant_type': 'authorization_code',
+        })
+        token_resp.raise_for_status()
+        access_token = token_resp.json().get('access_token')
+
+        info_resp = requests.get(
+            'https://www.googleapis.com/oauth2/v2/userinfo',
+            headers={'Authorization': f'Bearer {access_token}'}
+        )
+        info_resp.raise_for_status()
+        info = info_resp.json()
+
+        email   = info.get('email', '')
+        sso_id  = str(info.get('id', ''))
+        name    = info.get('name', '') or email.split('@')[0]
+        picture = info.get('picture')
+
+        user = db_service.get_user_by_sso('google', sso_id)
+        if not user:
+            existing = db_service.get_user_by_email(email)
+            if existing:
+                db_service.link_sso_to_user(existing['user_id'], 'google', sso_id)
+                user = existing
+            else:
+                username = _generate_sso_username(name, email)
+                uid = db_service.insert_sso_user(username, email, 'google', sso_id, picture)
+                user = {'user_id': uid}
+
+        return redirect(f'smartchat://auth/callback?user_id={user["user_id"]}&provider=google')
+    except Exception as e:
+        return redirect(f'smartchat://auth/callback?error={urllib.parse.quote(str(e))}')
+
+
+@app.route('/auth/microsoft')
+def auth_microsoft():
+    state = secrets.token_urlsafe(16)
+    _oauth_states.add(state)
+    params = {
+        'client_id': MICROSOFT_CLIENT_ID,
+        'redirect_uri': MICROSOFT_REDIRECT_URI,
+        'response_type': 'code',
+        'scope': 'openid email profile User.Read',
+        'state': state,
+        'response_mode': 'query',
+    }
+    return redirect('https://login.microsoftonline.com/common/oauth2/v2.0/authorize?' + urllib.parse.urlencode(params))
+
+
+@app.route('/auth/microsoft/callback')
+def auth_microsoft_callback():
+    code  = request.args.get('code')
+    state = request.args.get('state')
+
+    if not state or state not in _oauth_states:
+        return redirect('smartchat://auth/callback?error=invalid_state')
+    _oauth_states.discard(state)
+
+    if not code:
+        return redirect('smartchat://auth/callback?error=no_code')
+
+    try:
+        token_resp = requests.post(
+            'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+            data={
+                'code': code,
+                'client_id': MICROSOFT_CLIENT_ID,
+                'client_secret': MICROSOFT_CLIENT_SECRET,
+                'redirect_uri': MICROSOFT_REDIRECT_URI,
+                'grant_type': 'authorization_code',
+            }
+        )
+        token_resp.raise_for_status()
+        access_token = token_resp.json().get('access_token')
+
+        info_resp = requests.get(
+            'https://graph.microsoft.com/v1.0/me',
+            headers={'Authorization': f'Bearer {access_token}'}
+        )
+        info_resp.raise_for_status()
+        info = info_resp.json()
+
+        email  = info.get('mail') or info.get('userPrincipalName', '')
+        sso_id = str(info.get('id', ''))
+        name   = info.get('displayName', '') or email.split('@')[0]
+
+        user = db_service.get_user_by_sso('microsoft', sso_id)
+        if not user:
+            existing = db_service.get_user_by_email(email)
+            if existing:
+                db_service.link_sso_to_user(existing['user_id'], 'microsoft', sso_id)
+                user = existing
+            else:
+                username = _generate_sso_username(name, email)
+                uid = db_service.insert_sso_user(username, email, 'microsoft', sso_id, None)
+                user = {'user_id': uid}
+
+        return redirect(f'smartchat://auth/callback?user_id={user["user_id"]}&provider=microsoft')
+    except Exception as e:
+        return redirect(f'smartchat://auth/callback?error={urllib.parse.quote(str(e))}')
+
+
+# -------------------------------
 # PROFILE ENDPOINTS
 # -------------------------------
 
@@ -747,4 +920,4 @@ def handle_typing(data):
         emit("typing", {"sender_id": sender_id}, room=room_name, include_self=False)
 
 if __name__ == "__main__":
-    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=9000, debug=True, allow_unsafe_werkzeug=True)

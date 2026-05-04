@@ -462,3 +462,36 @@ def update_profile_picture(user_id, picture_path):
             (picture_path, user_id)
         )
         conn.commit()
+
+
+# -------------------------------------------------------------------
+# SSO FUNCTIONS
+# -------------------------------------------------------------------
+
+def get_user_by_sso(provider, sso_id):
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        cursor.execute(
+            "SELECT * FROM users WHERE sso_provider = %s AND sso_id = %s",
+            (provider, sso_id)
+        )
+        return cursor.fetchone()
+
+
+def insert_sso_user(username, email, sso_provider, sso_id, profile_picture=None):
+    with _db_cursor() as (conn, cursor):
+        sql = """
+            INSERT INTO users (username, email, password_hash, sso_provider, sso_id, profile_picture)
+            VALUES (%s, %s, NULL, %s, %s, %s)
+        """
+        cursor.execute(sql, (username, email, sso_provider, sso_id, profile_picture))
+        conn.commit()
+        return cursor.lastrowid
+
+
+def link_sso_to_user(user_id, provider, sso_id):
+    with _db_cursor() as (conn, cursor):
+        cursor.execute(
+            "UPDATE users SET sso_provider = %s, sso_id = %s WHERE user_id = %s",
+            (provider, sso_id, user_id)
+        )
+        conn.commit()
