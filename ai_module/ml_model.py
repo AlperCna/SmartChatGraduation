@@ -1,126 +1,82 @@
 import pickle
+import re
 import os
-
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "sentiment_model.pkl")
-VECTORIZER_PATH = os.path.join(os.path.dirname(__file__), "..", "tfidf_vectorizer.pkl")
-
-STYLE_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "style_model.pkl")
-STYLE_VECTORIZER_PATH = os.path.join(os.path.dirname(__file__), "..", "style_vectorizer.pkl")
-
-
-
 from dotenv import load_dotenv
 
 load_dotenv()
 
-USE_BERT_SENTIMENT = os.getenv("USE_BERT_SENTIMENT", "False").lower() == "true"
+# -----------------------------------------------------------------------
+# MODEL PATHS
+# -----------------------------------------------------------------------
+_BASE = os.path.join(os.path.dirname(__file__), "..")
 
-model = None
-vectorizer = None
+MODEL_V2_PATH     = os.path.join(_BASE, "sentiment_model_v2.pkl")
+STYLE_MODEL_PATH  = os.path.join(_BASE, "style_model.pkl")
+STYLE_VEC_PATH    = os.path.join(_BASE, "style_vectorizer.pkl")
 
-bert_pipeline = None
+# -----------------------------------------------------------------------
+# SENTIMENT — V2 (LinearSVC + word+char n-gram, dengeli + chat-notr)
+# -----------------------------------------------------------------------
+_sentiment_pipeline = None
+
+def _normalize(text: str) -> str:
+    """V2 ile aynı preprocessing."""
+    if not isinstance(text, str):
+        return ""
+    text = text.lower()
+    text = re.sub(r'http\S+|www\S+|\S+@\S+', ' ', text)
+    text = re.sub(r'(.)\1{2,}', r'\1\1', text)
+    text = re.sub(r'[^\w\sA-zÀ-ɏ]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 def load_sentiment_model():
-    global model, vectorizer, bert_pipeline
+    global _sentiment_pipeline
+    if _sentiment_pipeline is None:
+        print(">>> LOADING SENTIMENT MODEL V2 (LinearSVC + chat-notr augmented)...")
+        with open(MODEL_V2_PATH, "rb") as f:
+            _sentiment_pipeline = pickle.load(f)
+        print(">>> SENTIMENT MODEL V2 LOADED")
+    return _sentiment_pipeline
 
-    if USE_BERT_SENTIMENT:
-        if bert_pipeline is None:
-            print(">>> LOADING BERT SENTIMENT MODEL... This might take a while.")
-            try:
-                from transformers import pipeline
-                # Load a pretrained turkish sentiment pipeline, or a local fine-tuned one if exists.
-                # "dbmdz/bert-base-turkish-cased" fine-tuned by savasy
-                bert_pipeline = pipeline("sentiment-analysis", model="savasy/bert-base-turkish-sentiment-cased", device=-1)
-                print(">>> BERT MODEL LOADED SUCCESSFULLY!")
-            except Exception as e:
-                print(">>> FAILED TO LOAD BERT:", e)
-                # Fallback
-                pass
-    else:
-        if model is None or vectorizer is None:
-            with open(MODEL_PATH, "rb") as f:
-                model = pickle.load(f)
-            with open(VECTORIZER_PATH, "rb") as f:
-                vectorizer = pickle.load(f)
-            print(">>> SKLEARN TF-IDF SENTIMENT MODEL LOADED")
-            
-    return model, vectorizer
+def predict_sentiment(text: str) -> dict:
+    pipeline = load_sentiment_model()
 
+    norm = _normalize(text)
+    if not norm:
+        return {"sentiment": "Notr", "confidence": 0.0}
 
-def predict_sentiment(text: str):
-    global bert_pipeline
-    
-    # Check if BERT is enabled
-    if USE_BERT_SENTIMENT:
-        load_sentiment_model()
-        if bert_pipeline is not None:
-            print(">>> PREDICTING SENTIMENT WITH BERT")
-            result = bert_pipeline(text)[0]
-            label = result['label']
-            confidence = result['score']
-            
-            # Map BERT labels to our project labels
-            # if confidence is low, we might consider it NOTR, but by default it outputs POSITIVE / NEGATIVE
-            if label.lower() == 'positive':
-                final_label = 'positive'
-            elif label.lower() == 'negative':
-                final_label = 'negative'
-            else:
-                final_label = 'notr'
-                
-            # Simulate a 3rd class (NOTR) if confidence is below 70% 
-            if confidence < 0.70:
-                final_label = 'notr'
-                
-            return {
-                "sentiment": final_label,
-                "confidence": float(confidence)
-            }
-            
-    # Fallback to default TF-IDF model
-    model, vectorizer = load_sentiment_model()
-    
-    if model is None or vectorizer is None:
-         return {"sentiment": "notr", "confidence": 0.0}
+    pred       = pipeline.predict([norm])[0]
+    confidence = float(pipeline.predict_proba([norm]).max())
 
-    x = vectorizer.transform([text])
-    pred = model.predict(x)[0]
-    confidence = float(model.predict_proba(x).max())
+    # Düşük güven → Notr (belirsiz cümleleri zorla sınıflandırma)
+    # Threshold: 0.52 — chat kısa cümlelerinde model genellikle 0.4-0.5 arası kalır
+    if confidence < 0.52 and pred != "Notr":
+        pred = "Notr"
 
     return {
-        "sentiment": pred,
+        "sentiment":  pred,           # "Positive" | "Negative" | "Notr"
         "confidence": confidence
     }
 
-
-style_model = None
-style_vectorizer = None
-
+# -----------------------------------------------------------------------
+# STYLE MODEL (değişmedi)
+# -----------------------------------------------------------------------
+_style_model = None
+_style_vec   = None
 
 def load_style_model():
-    print(">>> USING STYLE MODEL FILE:", MODEL_PATH)
-    print(">>> MODEL EXISTS?", os.path.exists(MODEL_PATH))
-    global style_model, style_vectorizer
-
-    if style_model is None or style_vectorizer is None:
+    global _style_model, _style_vec
+    if _style_model is None or _style_vec is None:
         with open(STYLE_MODEL_PATH, "rb") as f:
-            style_model = pickle.load(f)
+            _style_model = pickle.load(f)
+        with open(STYLE_VEC_PATH, "rb") as f:
+            _style_vec = pickle.load(f)
+    return _style_model, _style_vec
 
-        with open(STYLE_VECTORIZER_PATH, "rb") as f:
-            style_vectorizer = pickle.load(f)
-
-    return style_model, style_vectorizer
-
-
-def predict_style(text: str):
-    print(">>> predict_style() FROM style_model.py IS RUNNING")
-    model, vectorizer = load_style_model()
-
-    x = vectorizer.transform([text])
+def predict_style(text: str) -> dict:
+    model, vec = load_style_model()
+    x    = vec.transform([text])
     pred = model.predict(x)[0]
-    confidence = float(model.predict_proba(x).max())
-
-    return {
-        "style": pred,
-        "confidence": confidence
-    }
+    conf = float(model.predict_proba(x).max())
+    return {"style": pred, "confidence": conf}

@@ -374,6 +374,90 @@ def update_relationship_metrics(user1_id, user2_id, sentiment="neutral"):
 
 
 # -------------------------------------------------------------------
+# MOOD FORECAST & EMPATHY SCORER
+# -------------------------------------------------------------------
+
+def get_messages_for_mood_forecast(user_id: int, partner_id: int, limit: int = 30):
+    """
+    Receiver (user_id)'in son N mesajını timestamp ile döndürür.
+    Sadece ikili konuşmadan, grup dışı mesajlar.
+    """
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        sql = """
+            SELECT content, timestamp, sender_id
+            FROM messages
+            WHERE sender_id = %s AND receiver_id = %s
+              AND group_id IS NULL
+              AND content IS NOT NULL AND content != ''
+              AND content NOT IN ('image', 'video', 'audio', 'file', 'location')
+              AND LENGTH(content) > 2
+            ORDER BY timestamp DESC
+            LIMIT %s
+        """
+        cursor.execute(sql, (user_id, partner_id, limit))
+        rows = cursor.fetchall()
+
+    for r in rows:
+        if r.get("timestamp"):
+            r["timestamp"] = r["timestamp"] if isinstance(r["timestamp"], str) else str(r["timestamp"])
+    return rows
+
+
+def get_hourly_sentiment_pattern(user_id: int, partner_id: int):
+    """
+    Kullanıcının farklı saatlerde gönderdiği mesaj sayısını döndürür.
+    Mood forecast için gece/gündüz pattern analizi.
+    """
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        sql = """
+            SELECT HOUR(timestamp) AS hour, COUNT(*) AS msg_count
+            FROM messages
+            WHERE sender_id = %s AND receiver_id = %s
+              AND group_id IS NULL
+              AND timestamp >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            GROUP BY HOUR(timestamp)
+            ORDER BY hour
+        """
+        cursor.execute(sql, (user_id, partner_id))
+        return cursor.fetchall()
+
+
+def get_message_frequency(user_id: int, partner_id: int):
+    """
+    Son 7 günlük mesaj yoğunluğunu gün bazında döndürür (sıklık düşüşü tespiti için).
+    """
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        sql = """
+            SELECT DATE(timestamp) AS day, COUNT(*) AS msg_count
+            FROM messages
+            WHERE sender_id = %s AND receiver_id = %s
+              AND group_id IS NULL
+              AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            GROUP BY DATE(timestamp)
+            ORDER BY day DESC
+        """
+        cursor.execute(sql, (user_id, partner_id))
+        return cursor.fetchall()
+
+
+def get_recent_receiver_messages(sender_id: int, receiver_id: int, limit: int = 5):
+    """Empathy scorer için: alıcının son N mesajını bağlam olarak döndürür."""
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        sql = """
+            SELECT content, timestamp
+            FROM messages
+            WHERE sender_id = %s AND receiver_id = %s
+              AND group_id IS NULL
+              AND content IS NOT NULL AND content != ''
+              AND LENGTH(content) > 2
+            ORDER BY timestamp DESC
+            LIMIT %s
+        """
+        cursor.execute(sql, (receiver_id, sender_id, limit))
+        return list(reversed(cursor.fetchall()))
+
+
+# -------------------------------------------------------------------
 # GROUP FUNCTIONS
 # -------------------------------------------------------------------
 
@@ -495,3 +579,98 @@ def link_sso_to_user(user_id, provider, sso_id):
             (provider, sso_id, user_id)
         )
         conn.commit()
+
+
+# -------------------------------------------------------------------
+# SUGGESTION ANALYTICS
+# -------------------------------------------------------------------
+
+def get_suggestion_analytics(user_id):
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        # Genel özet
+        cursor.execute("""
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) AS accepted_count,
+                SUM(CASE WHEN accepted = 0 THEN 1 ELSE 0 END) AS rejected_count,
+                SUM(CASE WHEN accepted IS NULL THEN 1 ELSE 0 END) AS pending_count
+            FROM suggestions
+            WHERE user_id = %s
+        """, (user_id,))
+        summary = cursor.fetchone()
+
+        # Stil bazlı kabul oranı
+        cursor.execute("""
+            SELECT
+                style,
+                COUNT(*) AS total,
+                SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) AS accepted,
+                SUM(CASE WHEN accepted = 0 THEN 1 ELSE 0 END) AS rejected
+            FROM suggestions
+            WHERE user_id = %s AND accepted IS NOT NULL AND style IS NOT NULL AND style != ''
+            GROUP BY style
+            ORDER BY total DESC
+        """, (user_id,))
+        by_style = cursor.fetchall()
+
+        return {"summary": summary, "by_style": by_style}
+
+
+# -------------------------------------------------------------------
+# CONVERSATION STATS
+# -------------------------------------------------------------------
+
+def get_conversation_stats(user1_id, user2_id):
+    with _db_cursor(dictionary=True) as (conn, cursor):
+        base = """
+            (sender_id = %s AND receiver_id = %s AND group_id IS NULL)
+            OR (sender_id = %s AND receiver_id = %s AND group_id IS NULL)
+        """
+        params = (user1_id, user2_id, user2_id, user1_id)
+
+        # Toplam + ilk/son mesaj tarihi
+        cursor.execute(f"""
+            SELECT COUNT(*) AS total,
+                   MIN(timestamp) AS first_msg,
+                   MAX(timestamp) AS last_msg
+            FROM messages
+            WHERE {base}
+        """, params)
+        overview = cursor.fetchone()
+
+        # Kişi başı mesaj sayısı
+        cursor.execute(f"""
+            SELECT sender_id, COUNT(*) AS msg_count
+            FROM messages
+            WHERE {base}
+            GROUP BY sender_id
+        """, params)
+        per_user = cursor.fetchall()
+
+        # En aktif saat
+        cursor.execute(f"""
+            SELECT HOUR(timestamp) AS hour, COUNT(*) AS cnt
+            FROM messages
+            WHERE {base}
+            GROUP BY hour
+            ORDER BY cnt DESC
+            LIMIT 1
+        """, params)
+        active_hour = cursor.fetchone()
+
+        # Tüm mesaj içerikleri (kelime frekansı + sentiment için)
+        cursor.execute(f"""
+            SELECT sender_id, content
+            FROM messages
+            WHERE {base}
+              AND content IS NOT NULL AND content != ''
+            ORDER BY timestamp ASC
+        """, params)
+        all_messages = cursor.fetchall()
+
+        return {
+            "overview": overview,
+            "per_user": per_user,
+            "active_hour": active_hour,
+            "all_messages": all_messages,
+        }
