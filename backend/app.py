@@ -247,53 +247,159 @@ def chat_partners(user_id):
 def get_relationship_history_route(user1_id, user2_id):
     history = db_service.get_relationship_history(user1_id, user2_id)
     relationship = db_service.get_relationship(user1_id, user2_id)
-    current_score = relationship["closeness_score"] if relationship else 50
-    current_style = relationship.get("style", "Formal (Resmi)") if relationship else "Formal (Resmi)"
+    current_score     = relationship["closeness_score"]  if relationship else 50
+    current_politeness= relationship["politeness_score"] if relationship else 50
+    current_style     = relationship.get("style", "Formal (Resmi)") if relationship else "Formal (Resmi)"
     return jsonify({
-        "success": True,
-        "current_score": current_score,
-        "current_style": current_style,
-        "history": history
+        "success":           True,
+        "current_score":     current_score,
+        "current_politeness":current_politeness,
+        "current_style":     current_style,
+        "history":           history
     })
 
 @app.route("/mood_forecast/<int:sender_id>/<int:receiver_id>", methods=["GET"])
 def get_mood_forecast(sender_id, receiver_id):
     """
-    Kullanıcının konuştuğu kişinin (receiver_id) son mesajlarına bakarak ruh halini tahmin eder.
+    Zaman ağırlıklı sentiment ortalaması + saatlik pattern + mesajlaşma sıklığı
+    birleştirilerek karşı tarafın ruh hali tahmin edilir.
+
+    Yanıt alanları:
+      mood        : "positive" | "neutral" | "negative" | "mixed"
+      score       : -1.0 … +1.0  (ağırlıklı duygu skoru)
+      trend       : "rising" | "falling" | "stable"
+      warning     : kullanıcıya gösterilecek kısa uyarı/öneri metni
+      tip         : iletişim tüyosu
+      data_points : kaç mesaj analiz edildi
     """
-    recent_messages = db_service.get_recent_messages_from_user(receiver_id, sender_id, limit=3)
-    
-    if not recent_messages:
-        return jsonify({"mood": "neutral", "warning": ""})
-        
-    neg_count = 0
-    pos_count = 0
-    
-    for msg in recent_messages:
+    import math
+
+    messages = db_service.get_messages_for_mood_forecast(receiver_id, sender_id, limit=30)
+    if not messages:
+        return jsonify({"mood": "neutral", "score": 0.0, "trend": "stable",
+                        "warning": "", "tip": "", "data_points": 0})
+
+    # ── 1. ZAMAN AĞIRLIKLI SENTİMENT ───────────────────────────────
+    # Üstel bozunma: λ = 0.08 → 24 saat önceki mesaj ~%15 ağırlık alır
+    LAMBDA = 0.08
+    now = datetime.utcnow()
+
+    sentiment_map = {"Positive": 1.0, "Negative": -1.0, "Notr": 0.0}
+    weighted_scores = []
+    weights = []
+    raw_sentiments = []
+
+    for msg in messages:
         text = msg.get("content", "")
-        if text:
-            # analyzer.polarity_scores yerine Türkçe için predict_sentiment kullanıyoruz
-            res = predict_sentiment(text)
-            sent = res.get("sentiment", "notr").lower()
-            
-            if sent == "negative":
-                neg_count += 1
-            elif sent == "positive":
-                pos_count += 1
-                
-    # Hassas test için 1 tane bile negatif varsa uyar:
-    if neg_count >= 1:
-        return jsonify({
-            "mood": "negative", 
-            "warning": "Bugün biraz gergin görünüyor, daha dikkatli yazmak ister misin?"
-        })
-    elif pos_count >= 1:
-        return jsonify({
-            "mood": "positive", 
-            "warning": "Bugün harika bir ruh halinde! Sohbetin tadını çıkar."
-        })
+        if not text:
+            continue
+        ts_raw = msg.get("timestamp", "")
+        try:
+            ts = datetime.strptime(str(ts_raw)[:19], "%Y-%m-%d %H:%M:%S")
+            age_hours = max(0, (now - ts).total_seconds() / 3600)
+        except Exception:
+            age_hours = 12
+
+        result = predict_sentiment(text)
+        sent = result.get("sentiment", "Notr")
+        conf = result.get("confidence", 0.5)
+        raw_sentiments.append(sent)
+
+        score = sentiment_map.get(sent, 0.0) * conf
+        weight = math.exp(-LAMBDA * age_hours)
+        weighted_scores.append(score * weight)
+        weights.append(weight)
+
+    if not weights:
+        return jsonify({"mood": "neutral", "score": 0.0, "trend": "stable",
+                        "warning": "", "tip": "", "data_points": 0})
+
+    weighted_avg = sum(weighted_scores) / sum(weights)
+
+    # ── 2. TREND: İLK YARI vs İKİNCİ YARI ─────────────────────────
+    # messages listesi DESC sıralı → ilk yarı = en yeni
+    mid = max(1, len(raw_sentiments) // 2)
+    score_recent = sum(sentiment_map.get(s, 0) for s in raw_sentiments[:mid]) / mid
+    score_older  = sum(sentiment_map.get(s, 0) for s in raw_sentiments[mid:]) / max(1, len(raw_sentiments) - mid)
+    delta = score_recent - score_older
+    if delta > 0.15:
+        trend = "rising"
+    elif delta < -0.15:
+        trend = "falling"
     else:
-        return jsonify({"mood": "neutral", "warning": ""})
+        trend = "stable"
+
+    # ── 3. SAATLIK PATTERN ─────────────────────────────────────────
+    current_hour = datetime.utcnow().hour
+    night_hours = set(range(22, 24)) | set(range(0, 6))
+    is_night = current_hour in night_hours
+
+    hourly_data = db_service.get_hourly_sentiment_pattern(receiver_id, sender_id)
+    night_msgs = sum(r["msg_count"] for r in hourly_data if r["hour"] in night_hours)
+    total_msgs  = sum(r["msg_count"] for r in hourly_data) or 1
+    night_ratio = night_msgs / total_msgs   # Bu kişi gece mi daha çok yazıyor?
+
+    # ── 4. MESAJLAŞMA SIKLIĞI ──────────────────────────────────────
+    freq_data = db_service.get_message_frequency(receiver_id, sender_id)
+    if len(freq_data) >= 2:
+        today_count     = freq_data[0]["msg_count"] if freq_data else 0
+        avg_older_count = sum(r["msg_count"] for r in freq_data[1:]) / (len(freq_data) - 1)
+        freq_drop = avg_older_count > 0 and (today_count / avg_older_count) < 0.4
+    else:
+        freq_drop = False
+
+    # ── 5. MOOD KARAR MANTIGI ──────────────────────────────────────
+    if weighted_avg <= -0.35:
+        mood = "negative"
+    elif weighted_avg >= 0.35:
+        mood = "positive"
+    elif -0.35 < weighted_avg < -0.1:
+        mood = "mixed"
+    else:
+        mood = "neutral"
+
+    # ── 6. UYARI & TÜYOgenerasyon ─────────────────────────────────
+    warning = ""
+    tip = ""
+
+    if mood == "negative":
+        if trend == "falling":
+            warning = "Son mesajlarda giderek daha gergin bir ton var. Belki bugün konuyu hafif tutmak iyi olabilir."
+        else:
+            warning = "Biraz gergin görünüyor. Mesajını göndermeden önce bir kez daha oku."
+        if is_night and night_ratio > 0.5:
+            tip = "Gece saatlerinde mesajlaşmayı tercih ediyor; hassas konular için gündüz daha uygun olabilir."
+        else:
+            tip = "Empati gösteren kısa bir cümle konuşmayı yumuşatabilir."
+
+    elif mood == "positive":
+        if trend == "rising":
+            warning = "Giderek daha iyi bir ruh halinde! Harika bir sohbet için iyi bir an."
+        else:
+            warning = "Bugün iyi bir ruh halinde görünüyor."
+        tip = "Olumlu havayı korumak için samimi ve sıcak bir ton sürdür."
+
+    elif mood == "mixed":
+        warning = "Duyguları karışık görünüyor — hem olumlu hem olumsuz mesajlar var."
+        tip = "Dikkatli ve anlayışlı bir yaklaşım benimsemek faydalı olabilir."
+
+    else:
+        warning = ""
+        tip = "Nötr bir ruh halinde; rahat ve doğal bir sohbet yapabilirsin."
+
+    if freq_drop:
+        warning += " Bugün normalden çok daha az mesaj attı — belki yoğun ya da yorgun olabilir."
+
+    return jsonify({
+        "mood":        mood,
+        "score":       round(weighted_avg, 3),
+        "trend":       trend,
+        "warning":     warning.strip(),
+        "tip":         tip,
+        "data_points": len(weights),
+        "night_writer": night_ratio > 0.5,
+        "freq_drop":    freq_drop,
+    })
 
 # 📤 Yeni: Fotoğraf/ses/video medya dosyası yükleme
 @app.route("/upload_media", methods=["POST"])
@@ -567,50 +673,638 @@ def smart_replies():
         if not sender_id or not receiver_id or not last_message:
             return jsonify({"error": "sender_id, receiver_id and last_message are required"}), 400
 
-        # We need the relationship style
         style_res = detect_style(sender_id, receiver_id, last_message)
         relationship_style = style_res.get("relationship_style", "Formal")
 
-        prompt = f"""
-Görev:
-Karşı taraf şu mesajı gönderdi: "{last_message}"
-Sen, {sender_id} numaralı kullanıcısın ve aranızdaki iletişim tarzı (closeness stili): '{relationship_style}'.
-Buna uygun, cevap olarak gönderilebilecek 3 farklı, KISA (2-5 kelime), doğal, Türkçe "anında yanıt" (quick reply) alternatifi üret.
-Lütfen sadece JSON formatında bir liste (array) döndür. Başka hiçbir açıklama veya markdown ekleme.
-Örnek:
-["Teşekkürler", "Harika fikir!", "Daha sonra konuşalım"]
-"""
+        prompt = f"""Karşı taraf şu mesajı gönderdi: "{last_message}"
+Aranızdaki iletişim tarzı: '{relationship_style}'.
+
+Tam olarak 3 farklı tonlu, KISA (2-6 kelime), doğal Türkçe yanıt üret:
+- "empathetic": Anlayışlı, sıcak, duygusal destek veren
+- "humorous": Hafif espirili, neşeli, samimi
+- "formal": Kibar, resmi, mesafeli
+
+Sadece aşağıdaki JSON formatında döndür, başka hiçbir şey ekleme:
+[
+  {{"tone": "empathetic", "text": "..."}},
+  {{"tone": "humorous", "text": "..."}},
+  {{"tone": "formal", "text": "..."}}
+]"""
+
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.6,
-            max_tokens=60
+            temperature=0.7,
+            max_tokens=120
         )
 
+        import json, re
         content = response.choices[0].message.content.strip()
-        
-        # Parse output
-        if content.startswith("```json"):
-            content = content[7:-3].strip()
-        elif content.startswith("```"):
-            content = content[3:-3].strip()
-            
+        if content.startswith("```"):
+            content = re.sub(r"^```[a-z]*\n?", "", content)
+            content = re.sub(r"\n?```$", "", content)
+
         try:
             replies = json.loads(content)
         except json.JSONDecodeError:
-            import re
-            matches = re.findall(r'"([^"]*)"', content)
-            replies = matches if len(matches) > 0 else []
+            replies = []
 
         if not isinstance(replies, list):
             replies = []
-            
+
         return jsonify({"replies": replies[:3]}), 200
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+# ----------------------------------------------------------
+# REPHRASE — "Bunu Nasıl Söylesem?"
+# ----------------------------------------------------------
+def _build_rephrase_context(closeness: int, politeness: int) -> str:
+    """Samimilik ve nezaket skoruna göre ilişki bağlamını açıklar."""
+    if closeness >= 75:
+        rel = "çok yakın, samimi arkadaşlık — argo, hitap kelimeleri, kısaltmalar doğal"
+    elif closeness >= 40:
+        rel = "orta düzey tanışıklık — 'sen' hitabı, samimi ama saygılı"
+    else:
+        rel = "resmi / az tanışıklık — 'siz' hitabı, mesafeli ve kibar"
+
+    if politeness >= 70:
+        pol = "karşılıklı nezaket yüksek, kaba ifadelerden kaçın"
+    elif politeness <= 30:
+        pol = "nezaket skoru düşük, aşırı kibarlık kalıpları yapay kaçar"
+    else:
+        pol = "orta düzey nezaket"
+
+    return f"İlişki: {rel}. Nezaket: {pol}."
+
+
+@app.route("/rephrase", methods=["POST"])
+def rephrase():
+    try:
+        import json, re
+        data = request.get_json()
+
+        text = data.get("text", "").strip()
+        sender_id = data.get("sender_id")
+        receiver_id = data.get("receiver_id")
+        receiver_username = data.get("receiver_username", "Karşı Taraf")
+
+        if not text or sender_id is None or receiver_id is None:
+            return jsonify({"error": "text, sender_id, receiver_id are required"}), 400
+
+        # --------------------------------------------------
+        # 1️⃣ SON 5 MESAJI AL (KONUŞMA CONTEXT)
+        # --------------------------------------------------
+        messages = db_service.get_messages(sender_id, receiver_id)
+        last_msgs = messages[-5:]
+
+        history = ""
+        for m in last_msgs:
+            speaker = "Ben" if m["sender_id"] == sender_id else receiver_username
+            content = m.get("content", "").strip()
+            if content:
+                history += f"{speaker}: {content}\n"
+
+        # --------------------------------------------------
+        # 2️⃣ STYLE DETECTION (HİBRİT – GPT + RELATIONSHIP)
+        # --------------------------------------------------
+        style_res = detect_style(
+            sender_id=sender_id,
+            receiver_id=receiver_id,
+            last_message=text
+        )
+        message_style = style_res["message_style"]
+
+        # --------------------------------------------------
+        # 3️⃣ SENTIMENT DETECTION (ML)
+        # --------------------------------------------------
+        sentiment_res = predict_sentiment(text)
+        sentiment = sentiment_res["sentiment"]
+        sentiment_confidence = sentiment_res["confidence"]
+
+        # --------------------------------------------------
+        # 4️⃣ İLİŞKİ METRİKLERİ GÜNCELLE / MATRİS HESAPLA
+        # --------------------------------------------------
+        db_service.update_relationship_metrics(sender_id, receiver_id, sentiment)
+
+        relationship = db_service.get_relationship(sender_id, receiver_id)
+        closeness  = relationship.get("closeness_score",  0)  if relationship else 0
+        politeness = relationship.get("politeness_score", 50) if relationship else 50
+        matrix_style = relationship.get("style", "Formal (Resmi)") if relationship else "Formal (Resmi)"
+
+        # --------------------------------------------------
+        # 5️⃣ İLİŞKİ BAĞLAMINI OLUŞTUR
+        # --------------------------------------------------
+        rel_context = _build_rephrase_context(closeness, politeness)
+        hitap = "sen" if closeness >= 40 else "siz"
+
+        # --------------------------------------------------
+        # 6️⃣ GPT İLE 3 VERSİYON ÜRET
+        # --------------------------------------------------
+        prompt = f"""Sen bir Türkçe mesajlaşma asistanısın. Görevin kullanıcının ham mesajını 3 farklı tonda yeniden yazmak.
+
+MESAJ: "{text}"
+
+BAĞLAM:
+- {rel_context}
+- İlişki stili: {matrix_style}
+- Mesajın duygusu: {sentiment}
+- Hitap şekli: "{hitap}"
+
+KONUŞMA GEÇMİŞİ (son mesajlar):
+{history if history else "(Geçmiş yok)"}
+
+---
+
+3 TON İÇİN KURALLAR:
+
+"kind" — NAZİK TON:
+  AMAÇ: Mesajın özünü yumuşat, karşı tarafın duygusuna alan aç.
+  YAP: Empati kur, soru soruyorsan neden merak ettiğini belirt, sıcak bir kapı bırak.
+  YAPMA: Sorgulamak gibi görünme, "merak ettim" gibi jenerik ekler koyma, cümleyi uzatma.
+  ÖRNEK → "neden böyle yapıyorsun?" için: "Bir şey mi oldu, anlatsana?"
+
+"direct" — DOĞRUDAN TON:
+  AMAÇ: Mesajı kısa ve net söyle, dolaşma.
+  YAP: Tek cümleyle, düz ve açık ifade et. Gereksiz kelime ekleme.
+  YAPMA: Kibar süsler, "lütfen", "acaba" gibi yumuşatıcılar ekleme.
+  ÖRNEK → "neden böyle yapıyorsun?" için: "Böyle yapmanın sebebi ne?"
+
+"humorous" — ESPRİLİ TON:
+  AMAÇ: Mesajın özünü koru ama hafif bir ironi, abartı veya kelime oyunu kat.
+  YAP: Beklenmedik bir kıyaslama, abartılı bir tepki veya güldürücü bir eklenti kullan.
+  YAPMA: Sadece ünlem veya emoji ekleyerek espri yapmaya çalışma, gerçekten komik bir büküm yap.
+  ÖRNEK → "neden böyle yapıyorsun?" için: "Böyle giderse seni bir kullanma kılavuzuyla anlamamız gerekecek."
+
+---
+
+ÇIKTI KURALLARI:
+- Her versiyon maksimum 1-2 cümle olsun
+- Yazım hatalarını düzelt ama anlam değiştirme
+- Sadece JSON döndür:
+[
+  {{"tone": "kind",     "text": "..."}},
+  {{"tone": "direct",   "text": "..."}},
+  {{"tone": "humorous", "text": "..."}}
+]"""
+
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.6,
+            max_tokens=220
+        )
+
+        # --------------------------------------------------
+        # 7️⃣ YANITI PARSE ET
+        # --------------------------------------------------
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```[a-z]*\n?", "", content)
+            content = re.sub(r"\n?```$", "", content)
+
+        try:
+            versions = json.loads(content)
+        except json.JSONDecodeError:
+            versions = []
+
+        if not isinstance(versions, list):
+            versions = []
+
+        # --------------------------------------------------
+        # 8️⃣ RESPONSE
+        # --------------------------------------------------
+        return jsonify({
+            "versions": versions[:3],
+
+            # 🔥 ANALİZ BİLGİSİ
+            "original": text,
+            "message_style": message_style,
+            "relationship_style": matrix_style,
+            "sentiment": sentiment,
+            "sentiment_confidence": sentiment_confidence,
+            "closeness": closeness,
+            "politeness": politeness,
+
+            "timestamp": datetime.utcnow().isoformat() + "Z"
+        }), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ----------------------------------------------------------
+# CONVERSATION SUMMARY
+# ----------------------------------------------------------
+@app.route("/conversation_summary", methods=["POST"])
+def conversation_summary():
+    try:
+        data = request.get_json()
+        sender_id = data.get("sender_id")
+        receiver_id = data.get("receiver_id")
+        limit = int(data.get("limit", 50))
+
+        if not sender_id or not receiver_id:
+            return jsonify({"error": "sender_id and receiver_id are required"}), 400
+
+        messages = db_service.get_messages(sender_id, receiver_id)
+        if not messages:
+            return jsonify({"error": "Özetlenecek mesaj bulunamadı."}), 404
+
+        recent = messages[-limit:]
+
+        sender_info = db_service.get_user_by_id(sender_id)
+        receiver_info = db_service.get_user_by_id(receiver_id)
+        sender_name = sender_info.get("username", "Sen") if sender_info else "Sen"
+        receiver_name = receiver_info.get("username", "Karşı taraf") if receiver_info else "Karşı taraf"
+
+        conversation_text = ""
+        for m in recent:
+            speaker = sender_name if m["sender_id"] == sender_id else receiver_name
+            content = m.get("content", "").strip()
+            if content:
+                conversation_text += f"{speaker}: {content}\n"
+
+        if not conversation_text.strip():
+            return jsonify({"error": "Metin içerikli mesaj bulunamadı."}), 404
+
+        first_ts = recent[0].get("timestamp") or recent[0].get("created_at", "")
+        last_ts = recent[-1].get("timestamp") or recent[-1].get("created_at", "")
+
+        prompt = f"""Aşağıdaki Türkçe mesajlaşma konuşmasını analiz et ve JSON formatında özetle.
+
+Konuşma ({len(recent)} mesaj):
+{conversation_text}
+
+Şu formatta yanıt ver (başka hiçbir şey ekleme):
+{{
+  "summary": "2-3 cümlelik genel özet",
+  "topics": ["konu1", "konu2", "konu3"],
+  "mood": "genel duygu tonu (pozitif/nötr/negatif/karışık)",
+  "highlight": "Konuşmadan en önemli veya dikkat çekici bir cümle (alıntı)"
+}}"""
+
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=300
+        )
+
+        import json, re
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```[a-z]*\n?", "", content)
+            content = re.sub(r"\n?```$", "", content)
+
+        result = json.loads(content)
+        result["message_count"] = len(recent)
+        result["date_from"] = str(first_ts)[:10] if first_ts else ""
+        result["date_to"] = str(last_ts)[:10] if last_ts else ""
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ----------------------------------------------------------
+# SUGGESTION ANALYTICS
+# ----------------------------------------------------------
+@app.route("/suggestion_analytics/<int:user_id>", methods=["GET"])
+def suggestion_analytics(user_id):
+    try:
+        data = db_service.get_suggestion_analytics(user_id)
+        summary = data["summary"]
+        by_style = data["by_style"]
+
+        total = int(summary["total"] or 0)
+        accepted = int(summary["accepted_count"] or 0)
+        rejected = int(summary["rejected_count"] or 0)
+        pending = int(summary["pending_count"] or 0)
+        decided = accepted + rejected
+        acceptance_rate = round(accepted / decided * 100, 1) if decided > 0 else None
+
+        style_breakdown = []
+        for row in by_style:
+            row_total = int(row["total"] or 0)
+            row_accepted = int(row["accepted"] or 0)
+            row_rejected = int(row["rejected"] or 0)
+            rate = round(row_accepted / (row_accepted + row_rejected) * 100, 1) if (row_accepted + row_rejected) > 0 else 0
+            style_breakdown.append({
+                "style":         row["style"],
+                "total":         row_total,
+                "accepted":      row_accepted,
+                "rejected":      row_rejected,
+                "acceptance_rate": rate,
+            })
+
+        # En çok kabul edilen stil
+        best_style = max(style_breakdown, key=lambda x: x["acceptance_rate"], default=None)
+        # En az kabul edilen stil
+        worst_style = min(style_breakdown, key=lambda x: x["acceptance_rate"], default=None)
+
+        return jsonify({
+            "total":           total,
+            "accepted":        accepted,
+            "rejected":        rejected,
+            "pending":         pending,
+            "acceptance_rate": acceptance_rate,
+            "best_style":      best_style["style"] if best_style else None,
+            "worst_style":     worst_style["style"] if worst_style else None,
+            "by_style":        style_breakdown,
+        }), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ----------------------------------------------------------
+# CONVERSATION STATISTICS
+# ----------------------------------------------------------
+@app.route("/conversation_stats/<int:user1_id>/<int:user2_id>", methods=["GET"])
+def conversation_stats(user1_id, user2_id):
+    try:
+        import re as _re
+        from collections import Counter
+
+        raw = db_service.get_conversation_stats(user1_id, user2_id)
+        overview  = raw["overview"]
+        per_user  = raw["per_user"]
+        active_hr = raw["active_hour"]
+        all_msgs  = raw["all_messages"]
+
+        total_messages = int(overview["total"] or 0)
+        first_msg = str(overview["first_msg"])[:10] if overview["first_msg"] else None
+        last_msg  = str(overview["last_msg"])[:10]  if overview["last_msg"]  else None
+
+        # Gün sayısı & günlük ortalama
+        avg_per_day = None
+        if first_msg and last_msg:
+            from datetime import date
+            d1 = date.fromisoformat(first_msg)
+            d2 = date.fromisoformat(last_msg)
+            days = max((d2 - d1).days, 1)
+            avg_per_day = round(total_messages / days, 1)
+
+        # Kişi başı mesaj sayısı
+        user_counts = {str(r["sender_id"]): int(r["msg_count"]) for r in per_user}
+        u1_count = user_counts.get(str(user1_id), 0)
+        u2_count = user_counts.get(str(user2_id), 0)
+
+        # En aktif saat
+        most_active_hour = int(active_hr["hour"]) if active_hr else None
+
+        # Duygu dağılımı — son 60 mesaj üzerinden ML çalıştır
+        texts = [m["content"] for m in all_msgs if m.get("content", "").strip()]
+        sample = texts[-60:]
+        pos = neg = neu = 0
+        for t in sample:
+            try:
+                res = predict_sentiment(t)
+                s = res.get("sentiment", "notr").lower()
+                if s == "positive":   pos += 1
+                elif s == "negative": neg += 1
+                else:                 neu += 1
+            except Exception:
+                neu += 1
+        sample_total = pos + neg + neu or 1
+        sentiment_dist = {
+            "positive": round(pos / sample_total * 100, 1),
+            "negative": round(neg / sample_total * 100, 1),
+            "neutral":  round(neu / sample_total * 100, 1),
+        }
+
+        # En sık kullanılan kelimeler (Türkçe stopword filtresi)
+        TR_STOPWORDS = {
+            # Türkçe bağlaçlar / zamirler / edatlar
+            "bir", "bu", "ve", "da", "de", "mi", "mu", "mü", "mı",
+            "ile", "için", "ama", "ya", "ne", "ben", "sen", "o",
+            "biz", "siz", "onlar", "gibi", "daha", "çok", "var",
+            "yok", "olur", "oldu", "benim", "senin", "onun", "ki",
+            "şu", "şey", "evet", "hayır", "tamam", "lan", "ya",
+            "değil", "kadar", "sonra", "önce", "bile", "hep",
+            "nasıl", "neden", "çünkü", "eğer", "aslında", "zaten",
+            "yani", "işte", "artık", "hiç", "her", "hem", "ise",
+            "mı", "mu", "ama", "fakat", "lakin", "oysa", "sanki",
+            "belki", "galiba", "hala", "hâlâ", "sadece", "sadece",
+            "şimdi", "şimdi", "bugün", "yarın", "dün", "bunu",
+            "bana", "sana", "ona", "bunu", "şunu", "bende", "sende",
+            # İngilizce yaygın kelimeler (medya / sistem mesajlarından)
+            "image", "hello", "video", "audio", "file", "http",
+            "https", "null", "none", "true", "false", "the", "and",
+            "are", "you", "for", "this", "that", "with", "have",
+            "from", "not", "but", "what", "all", "were", "when",
+            # Sistem / uygulama kelimeleri
+            "gönderildi", "iletildi", "okundu", "mesaj", "resim",
+            "fotoğraf", "dosya", "ses", "görüntü",
+        }
+        all_words = []
+        for t in texts:
+            words = _re.findall(r'\b[a-zA-ZğüşıöçĞÜŞİÖÇ]{3,}\b', t.lower())
+            all_words.extend([w for w in words if w not in TR_STOPWORDS])
+        top_words = [{"word": w, "count": c} for w, c in Counter(all_words).most_common(10)]
+
+        return jsonify({
+            "total_messages":   total_messages,
+            "first_message":    first_msg,
+            "last_message":     last_msg,
+            "avg_per_day":      avg_per_day,
+            "user1_count":      u1_count,
+            "user2_count":      u2_count,
+            "most_active_hour": most_active_hour,
+            "sentiment":        sentiment_dist,
+            "top_words":        top_words,
+        }), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ── EMPATHY SCORER ─────────────────────────────────────────────────────────
+# Kural tabanlı Türkçe empati kalıpları + GPT ile derin analiz
+_EMPATHY_PATTERNS = {
+    "high": [
+        "anladım", "anlıyorum", "seni anlıyorum", "zor olmuş", "zor oldu",
+        "üzgünüm", "haklısın", "haklı", "hissediyorum", "yanındayım",
+        "destekliyorum", "destek olabilirim", "çok zor", "büyük acı",
+        "ne kadar zor", "içten geçiyor", "ne hissettirmiş", "nasıl hissediyorsun",
+        "seninle birlikte", "geçer bu", "atlarsın", "güçlüsün",
+        "senin yanındayım", "ne istersen", "ne yapabilirim", "yardım edebilir miyim",
+        "zaman zor olabilir", "bazen böyle olur",
+    ],
+    "medium": [
+        "tamam", "evet", "doğru", "biliyorum", "tahmin ediyorum",
+        "mantıklı", "anlaşılır", "fena değil", "olabilir",
+        "bekliyorum", "iyi olacak", "sabret", "geçer",
+    ],
+    "low": [
+        "neden", "ama", "yok öyle bir şey", "saçmalama", "abartıyorsun",
+        "olmaz", "anlayamam", "anlamıyorum",
+    ],
+}
+
+def _rule_based_empathy_score(text: str) -> float:
+    """0.0 – 1.0 arası kural tabanlı empati skoru."""
+    text_lower = text.lower()
+    score = 0.4  # başlangıç nötr
+
+    for phrase in _EMPATHY_PATTERNS["high"]:
+        if phrase in text_lower:
+            score = min(1.0, score + 0.15)
+
+    for phrase in _EMPATHY_PATTERNS["medium"]:
+        if phrase in text_lower:
+            score = min(1.0, score + 0.05)
+
+    for phrase in _EMPATHY_PATTERNS["low"]:
+        if phrase in text_lower:
+            score = max(0.0, score - 0.12)
+
+    return score
+
+
+@app.route("/empathy_score", methods=["POST"])
+def empathy_score():
+    """
+    Gönderilmek üzere yazılan mesajın karşı tarafın duygusuna olan
+    empati düzeyini ölçer.
+
+    İstek gövdesi:
+        message    : analiz edilecek metin
+        sender_id  : gönderen kullanıcı
+        receiver_id: alıcı kullanıcı
+
+    Yanıt:
+        score       : 0 – 100 (final skor)
+        level       : "low" | "medium" | "high"
+        rule_score  : kural tabanlı kısmi skor
+        gpt_score   : GPT kısmi skor
+        feedback    : neden bu skoru aldı
+        suggestion  : nasıl daha empatik olabilir
+        politeness_delta : ilişki metriğine uygulanan değişim
+    """
+    data = request.get_json() or {}
+    message     = (data.get("message") or "").strip()
+    sender_id   = data.get("sender_id")
+    receiver_id = data.get("receiver_id")
+
+    if not message:
+        return jsonify({"error": "message boş olamaz"}), 400
+
+    # ── 1. KURAL TABANLI SKOR ────────────────────────────────────
+    rule_raw   = _rule_based_empathy_score(message)
+    rule_score = round(rule_raw * 100)
+
+    # ── 2. BAĞLAM: Alıcının son mesajları ────────────────────────
+    context_msgs = []
+    if sender_id and receiver_id:
+        try:
+            rows = db_service.get_recent_receiver_messages(int(sender_id), int(receiver_id), limit=4)
+            context_msgs = [r["content"] for r in rows if r.get("content")]
+        except Exception:
+            pass
+
+    context_block = ""
+    if context_msgs:
+        context_block = "Son mesajlar (alıcıdan):\n" + "\n".join(f"- {m}" for m in context_msgs) + "\n\n"
+
+    # ── 3. GPT ANALİZİ ───────────────────────────────────────────
+    prompt = f"""{context_block}Analiz edilecek mesaj: "{message}"
+
+Görev: Yukarıdaki mesajın karşı tarafın duygularına ne kadar empati kurduğunu değerlendir.
+
+Şu kriterlere göre puan ver (0-100):
+- Duygusal tanıma: Karşıdakinin hissini fark ediyor mu?
+- Doğrulama: "Haklısın", "Anladım" gibi ifadeler var mı?
+- Destek sunma: Yardım teklif ediyor ya da yanında olduğunu hissettiriyor mu?
+- Ton: Sıcak mı, soğuk mu, eleştirel mi?
+
+Sadece şu JSON formatında yanıt ver, başka hiçbir şey yazma:
+{{
+  "gpt_score": <0-100 tam sayı>,
+  "feedback": "<neden bu puan — max 1 cümle, Türkçe>",
+  "suggestion": "<nasıl daha empatik yapılabilir — max 1 cümle, Türkçe, yoksa boş string>"
+}}"""
+
+    gpt_score   = 50
+    feedback    = ""
+    suggestion  = ""
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=200,
+        )
+        import json as _json
+        raw = resp.choices[0].message.content.strip()
+        # JSON bloğu içinden çek
+        start = raw.find("{")
+        end   = raw.rfind("}") + 1
+        if start != -1 and end > start:
+            parsed     = _json.loads(raw[start:end])
+            gpt_score  = int(parsed.get("gpt_score", 50))
+            feedback   = parsed.get("feedback", "")
+            suggestion = parsed.get("suggestion", "")
+    except Exception as e:
+        feedback = "GPT analizi tamamlanamadı."
+
+    # ── 4. FINAL SKOR (kural %35 + GPT %65) ─────────────────────
+    final_score = round(rule_score * 0.35 + gpt_score * 0.65)
+    final_score = max(0, min(100, final_score))
+
+    if final_score >= 70:
+        level = "high"
+    elif final_score >= 40:
+        level = "medium"
+    else:
+        level = "low"
+
+    # ── 5. POLİTENESS DELTA (ilişki metriği) ────────────────────
+    if final_score >= 70:
+        politeness_delta = 4
+    elif final_score >= 50:
+        politeness_delta = 1
+    elif final_score < 30:
+        politeness_delta = -3
+    else:
+        politeness_delta = 0
+
+    if sender_id and receiver_id and politeness_delta != 0:
+        try:
+            rel = db_service.get_relationship(int(sender_id), int(receiver_id))
+            if rel:
+                cur_pol = rel.get("politeness_score", 50)
+                new_pol = max(0, min(100, cur_pol + politeness_delta))
+                db_service.update_relationship(
+                    int(sender_id), int(receiver_id), politeness_score=new_pol
+                )
+        except Exception:
+            pass
+
+    return jsonify({
+        "score":            final_score,
+        "level":            level,
+        "rule_score":       rule_score,
+        "gpt_score":        gpt_score,
+        "feedback":         feedback,
+        "suggestion":       suggestion,
+        "politeness_delta": politeness_delta,
+    })
 
 
 # Group REST APIs

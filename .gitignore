@@ -4,6 +4,8 @@ venv/
 __pycache__/
 *.pyc
 .env
+.claude/
+.idea/workspace.xml
 
 # BERT Models and Data (Large Files)
 smartchat_bert_model/
